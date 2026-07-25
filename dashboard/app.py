@@ -13,11 +13,14 @@ Run with:
     streamlit run dashboard/app.py
 """
 
+import json
+import math
 import os
 import sys
 
 import altair as alt
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -27,6 +30,7 @@ if _HERE not in sys.path:
 import data  # noqa: E402
 import palette  # noqa: E402
 from classification import config as clf_cfg  # noqa: E402
+from classification.geo import CITY_COORDS  # noqa: E402
 
 st.set_page_config(page_title="Anomaly Detection Dashboard", page_icon="🛡️", layout="wide")
 
@@ -179,23 +183,35 @@ def style_anomaly_type_column(df, column="anomaly_type"):
     return df.style.map(_style, subset=[column])
 
 
+def _risk_ramp_index(value, lo, hi, n):
+    """Snap a risk_score to a step index in the n-step sequential ramp, given
+    the value range it should scale against. Shared by the table gradient and
+    the Attack Map's arc coloring so both read the same magnitude the same way."""
+    if hi <= lo:
+        return n - 1
+    frac = max(0.0, min(1.0, (value - lo) / (hi - lo)))
+    return round(frac * (n - 1))
+
+
+def risk_ramp_color(value, lo, hi):
+    """Hex color for a risk_score value from the project's validated sequential
+    blue ramp (dashboard/palette.py's RISK_SEQUENTIAL_RAMP)."""
+    steps = palette.RISK_SEQUENTIAL_RAMP
+    return steps[_risk_ramp_index(value, lo, hi, len(steps))]
+
+
 def style_risk_score_gradient(styler, series, column="risk_score"):
     """Smooth light->dark gradient on risk_score by magnitude, using only the
-    project's validated sequential blue ramp (dashboard/palette.py's
-    RISK_SEQUENTIAL_RAMP) snapped to the nearest step -- a sequential
-    (magnitude) encoding, kept deliberately separate from the categorical
-    anomaly_type tint above, applied on top of a Styler already built by
+    project's validated sequential blue ramp -- a sequential (magnitude)
+    encoding, kept deliberately separate from the categorical anomaly_type
+    tint above, applied on top of a Styler already built by
     style_anomaly_type_column so both cues coexist on their own columns."""
     lo, hi = float(series.min()), float(series.max())
     steps = palette.RISK_SEQUENTIAL_RAMP
     n = len(steps)
 
     def _style(value):
-        if hi <= lo:
-            idx = n - 1
-        else:
-            frac = max(0.0, min(1.0, (value - lo) / (hi - lo)))
-            idx = round(frac * (n - 1))
+        idx = _risk_ramp_index(value, lo, hi, n)
         text = palette.DARK_TEXT_PRIMARY if idx >= n // 2 else "#0b0b0b"
         return f"background-color: {steps[idx]}; color: {text}; font-weight: 600;"
 
@@ -415,16 +431,132 @@ def render_metrics_summary():
 
 
 # ---------------------------------------------------------------------------
+# View 4: Attack Map
+# ---------------------------------------------------------------------------
+def _great_circle_path(coord_a, coord_b, n=48):
+    """Points along the great-circle path between two (lat, lon) coordinates,
+    via spherical linear interpolation -- so the arc actually curves on the
+    globe instead of Scattergeo's default straight-line interpolation in
+    lat/lon space, which reads as a kinked line rather than a geodesic."""
+    lat1, lon1 = math.radians(coord_a[0]), math.radians(coord_a[1])
+    lat2, lon2 = math.radians(coord_b[0]), math.radians(coord_b[1])
+    x1, y1, z1 = math.cos(lat1) * math.cos(lon1), math.cos(lat1) * math.sin(lon1), math.sin(lat1)
+    x2, y2, z2 = math.cos(lat2) * math.cos(lon2), math.cos(lat2) * math.sin(lon2), math.sin(lat2)
+
+    dot = max(-1.0, min(1.0, x1 * x2 + y1 * y2 + z1 * z2))
+    theta = math.acos(dot)
+    if theta < 1e-9:
+        return [coord_a[0], coord_b[0]], [coord_a[1], coord_b[1]]
+
+    lats, lons = [], []
+    for i in range(n + 1):
+        f = i / n
+        a = math.sin((1 - f) * theta) / math.sin(theta)
+        b = math.sin(f * theta) / math.sin(theta)
+        x, y, z = a * x1 + b * x2, a * y1 + b * y2, a * z1 + b * z2
+        lats.append(math.degrees(math.atan2(z, math.sqrt(x * x + y * y))))
+        lons.append(math.degrees(math.atan2(y, x)))
+    return lats, lons
+
+
+def render_attack_map():
+    st.header("Attack Map")
+    st.caption(
+        "Every classified alert plotted at its geo_location on a rotatable globe, colored by "
+        "anomaly_type (same palette as every other view). impossible_travel alerts additionally "
+        "draw a great-circle arc between the two locations involved in that incident, shaded by "
+        "risk_score. Drag to rotate; scroll or pinch to zoom."
+    )
+
+    alerts = data.load_alerts_with_geo()
+    mapped = alerts[alerts["geo_location"].isin(CITY_COORDS)].copy()
+    n_unmapped = len(alerts) - len(mapped)
+
+    fig = go.Figure()
+
+    types_present, _ = palette.domain_range(mapped["anomaly_type"].unique())
+    for atype in types_present:
+        sub = mapped[mapped["anomaly_type"] == atype]
+        if sub.empty:
+            continue
+        lats = [CITY_COORDS[g][0] for g in sub["geo_location"]]
+        lons = [CITY_COORDS[g][1] for g in sub["geo_location"]]
+        fig.add_trace(go.Scattergeo(
+            lat=lats, lon=lons, mode="markers", name=atype,
+            marker=dict(size=7, color=palette.FULL_COLOR_MAP[atype],
+                        line=dict(width=0.6, color=palette.DARK_PAGE_PLANE)),
+            customdata=list(zip(sub["entity_id"], sub["risk_score"], sub["geo_location"])),
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>" + atype + "<br>%{customdata[2]}<br>"
+                "risk_score=%{customdata[1]:.4f}<extra></extra>"
+            ),
+        ))
+
+    it_rows = mapped[mapped["anomaly_type"] == "impossible_travel"]
+    lo, hi = float(alerts["risk_score"].min()), float(alerts["risk_score"].max())
+    arc_legend_shown = False
+    n_arcs = 0
+    for row in it_rows.itertuples():
+        try:
+            features = json.loads(row.top_contributing_features)
+        except (TypeError, ValueError):
+            continue
+        other_geo = features.get("other_geo_location")
+        if other_geo not in CITY_COORDS or row.geo_location not in CITY_COORDS:
+            continue
+
+        arc_lats, arc_lons = _great_circle_path(CITY_COORDS[row.geo_location], CITY_COORDS[other_geo])
+        fig.add_trace(go.Scattergeo(
+            lat=arc_lats, lon=arc_lons, mode="lines",
+            line=dict(width=2, color=risk_ramp_color(row.risk_score, lo, hi)),
+            opacity=0.85,
+            name="impossible_travel arc",
+            legendgroup="impossible_travel_arc",
+            showlegend=not arc_legend_shown,
+            hoverinfo="skip",
+        ))
+        arc_legend_shown = True
+        n_arcs += 1
+
+    fig.update_geos(
+        projection_type="orthographic",
+        showland=True, landcolor=palette.DARK_SURFACE,
+        showocean=True, oceancolor=palette.DARK_PAGE_PLANE,
+        showcountries=True, countrycolor=palette.DARK_GRIDLINE,
+        showcoastlines=True, coastlinecolor=palette.DARK_GRIDLINE,
+        showframe=False,
+        bgcolor="rgba(0,0,0,0)",
+    )
+    fig.update_layout(
+        height=640,
+        margin=dict(l=0, r=0, t=10, b=0),
+        paper_bgcolor="rgba(0,0,0,0)",
+        legend=dict(font=dict(color=palette.DARK_TEXT_SECONDARY), bgcolor="rgba(0,0,0,0)"),
+    )
+    st.plotly_chart(fig, width="stretch", theme=None)
+
+    footnote = f"{len(mapped):,} of {len(alerts):,} alerts plotted; {n_arcs} impossible_travel arc(s) drawn."
+    if n_unmapped:
+        footnote += (f" {n_unmapped} alert(s) reference a geo_location outside the reference lookup "
+                     f"table (classification/geo.py) and are not plotted.")
+    st.caption(footnote)
+
+
+# ---------------------------------------------------------------------------
 # Navigation
 # ---------------------------------------------------------------------------
 PAGES = {
     "Alert Queue": render_alert_queue,
     "Entity History": render_entity_history,
     "Metrics Summary": render_metrics_summary,
+    "Attack Map": render_attack_map,
 }
 
 
 def main():
+    st.write("DEBUG data module path:", data.__file__)
+    st.write("DEBUG has load_alerts_with_geo:", hasattr(data, "load_alerts_with_geo"))
+
     _inject_theme_css()
     _render_hero()
 

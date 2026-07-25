@@ -65,6 +65,22 @@ def compute_metrics():
 
 
 @st.cache_data
+def load_alerts_with_geo():
+    """Alerts joined with the access-log's geo_location, for the Attack Map view
+    only -- a separate join from load_alerts_with_context() (which pulls a
+    different set of columns for the Alert Queue / Entity History views), so
+    neither existing view's binding changes."""
+    alerts = load_alerts()
+    logs = load_access_logs()
+    merged = alerts.merge(
+        logs[["event_id", "entity_id", "geo_location"]],
+        on=["event_id", "entity_id"],
+        how="left",
+    )
+    return merged
+
+
+@st.cache_data
 def compute_roc_auc():
     """Thin cached wrapper around models/evaluate.py's own scored-vs-ground-truth
     join -- the same ROC-AUC number `python -m models.evaluate` reports."""
