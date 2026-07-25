@@ -37,13 +37,12 @@ from classification.geo import CITY_COORDS  # noqa: E402
 st.set_page_config(page_title="Anomaly Detection Dashboard", page_icon="🛡️", layout="wide")
 
 # Reciprocal link back to the project landing page (docs/index.html), same
-# constant pattern as docs/index.html's own DASHBOARD_URL. Unlike that
-# localhost default, there's no dev server for a static file to point at
-# locally -- Streamlit only serves its own app, not arbitrary repo paths --
-# so this defaults to the GitHub Pages URL. Replace <your-org>/<your-repo>
-# once Pages is enabled; for local testing, swap in a file:// URL to this
-# repo's docs/index.html on your machine.
-LANDING_PAGE_URL = "https://<your-org>.github.io/<your-repo>/"
+# constant pattern as docs/index.html's own DASHBOARD_URL. GitHub Pages isn't
+# enabled for this repo yet, so this points at the local docs/index.html via
+# a file:// URL instead of a github.io URL that would 404. Once Pages is
+# enabled (repo Settings -> Pages -> source: docs/ on master), swap this for
+# https://nirvanadas2.github.io/anomaly-detection-hackathon/.
+LANDING_PAGE_URL = "file:///C:/Users/Nirvana%20Das/anomaly-detection-hackathon/docs/index.html"
 
 # Avg per-event scoring+classification latency measured by demo_streaming.py's
 # live replay (see README's "Key results" -- not computed by this app, since
