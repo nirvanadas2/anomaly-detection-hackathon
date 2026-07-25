@@ -1,7 +1,16 @@
-# Environment / secrets -- never commit real keys. .env.example is the
-# checked-in template; everything else matching these patterns is local-only.
+# Environment / secrets
 .env
 .env.local
 .env.*.local
 *.env
 !.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
