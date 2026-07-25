@@ -88,6 +88,17 @@ def compute_roc_auc():
     return float(roc_auc_score(df["is_anomaly"], df["risk_score"]))
 
 
+def entity_recent_events(entity_id, n=10):
+    """Last n events (by timestamp, oldest first) for one entity from
+    access_logs.csv -- the event-history context fed into the Alert Queue's
+    AI Triage Copilot prompt. Not cached itself: it's a cheap filter over the
+    already-cached load_access_logs() frame, kept separate from that cache so
+    it's obviously safe to call fresh on every alert selection."""
+    logs = load_access_logs()
+    entity_logs = logs[logs["entity_id"] == entity_id].sort_values("timestamp")
+    return entity_logs.tail(n)
+
+
 def typical_resource_set(resource_series, mass=clf_cfg.TOP_RESOURCE_MASS):
     """Smallest set of resources covering `mass` of an entity's access frequency
     -- same definition classification/rules.py uses for its lateral_movement rule."""

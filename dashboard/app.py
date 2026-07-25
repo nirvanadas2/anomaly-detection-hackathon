@@ -13,6 +13,7 @@ Run with:
     streamlit run dashboard/app.py
 """
 
+import html
 import json
 import math
 import os
@@ -27,6 +28,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
+import ai_triage  # noqa: E402
 import data  # noqa: E402
 import palette  # noqa: E402
 from classification import config as clf_cfg  # noqa: E402
@@ -221,6 +223,53 @@ def style_risk_score_gradient(styler, series, column="risk_score"):
 # ---------------------------------------------------------------------------
 # View 1: Alert Queue
 # ---------------------------------------------------------------------------
+# Confidence -> color for the AI Triage Copilot card. Not part of palette.py's
+# validated categorical/sequential sets (those encode anomaly_type and
+# risk_score respectively) -- this is a separate status axis, so it borrows
+# COLOR_CRITICAL/RISK_ACCENT/DARK_TEXT_MUTED as standalone accents rather than
+# extending either encoded scale.
+TRIAGE_CONFIDENCE_COLORS = {
+    "high": palette.COLOR_CRITICAL,
+    "medium": palette.RISK_ACCENT,
+    "low": palette.DARK_TEXT_MUTED,
+}
+
+
+def _render_triage_card(result):
+    """Styled card for one Gemini triage result. Model output is untrusted
+    text, so every field is html.escape()'d before going into unsafe_allow_html
+    markdown."""
+    confidence = str(result.get("confidence", "")).strip().lower()
+    color = TRIAGE_CONFIDENCE_COLORS.get(confidence, palette.DARK_TEXT_MUTED)
+    summary = html.escape(str(result.get("summary", "")))
+    action = html.escape(str(result.get("recommended_action", "")))
+    confidence_label = html.escape(confidence or "unknown")
+    model_used = html.escape(str(result.get("_model_used", "gemini")))
+
+    st.markdown(
+        f"""
+        <div style="background: var(--surface-1); border: 1px solid var(--border);
+                    border-left: 4px solid {color}; border-radius: 10px;
+                    padding: 16px 22px; margin-top: 4px;">
+          <div style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;
+                      color: var(--text-muted); margin-bottom: 8px;">🤖 AI Triage Copilot &mdash; {model_used}</div>
+          <p style="color: var(--text-primary); font-size: 1.02rem; margin: 0 0 14px 0; line-height: 1.5;">{summary}</p>
+          <div style="display:flex; gap: 32px; flex-wrap: wrap;">
+            <div>
+              <div style="color: var(--text-muted); font-size:0.78rem; text-transform: uppercase; letter-spacing:0.03em;">Recommended action</div>
+              <div style="color: var(--text-primary); font-weight:600; margin-top: 2px;">{action}</div>
+            </div>
+            <div>
+              <div style="color: var(--text-muted); font-size:0.78rem; text-transform: uppercase; letter-spacing:0.03em;">Model confidence</div>
+              <div style="color: {color}; font-weight:700; text-transform: capitalize; margin-top: 2px;">{confidence_label}</div>
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_alert_queue():
     st.header("Alert Queue")
     st.caption("Events flagged by the model, ranked by risk_score. Click a column header to sort; use the filters below to narrow the queue.")
@@ -261,10 +310,144 @@ def render_alert_queue():
         },
     )
 
+    st.subheader("AI Triage Copilot")
+    st.caption(
+        "Pick an alert below to get a live Gemini-drafted incident summary, recommended "
+        "response action, and confidence level -- generated fresh on every selection."
+    )
+
+    if filtered.empty:
+        st.caption("No alerts match the current filters.")
+    else:
+        selected_event_id = st.selectbox("event_id", filtered["event_id"].tolist(), key="triage_event_id")
+        alert_row = filtered.loc[filtered["event_id"] == selected_event_id].iloc[0]
+
+        if not ai_triage.is_configured():
+            st.info("Set GOOGLE_API_KEY environment variable to enable AI Triage Copilot")
+        else:
+            recent_events = data.entity_recent_events(alert_row["entity_id"]).to_dict("records")
+            with st.spinner("Consulting Gemini..."):
+                try:
+                    result = ai_triage.run_triage(alert_row.to_dict(), recent_events)
+                except Exception as exc:
+                    st.error(f"AI Triage Copilot call failed: {exc}")
+                else:
+                    _render_triage_card(result)
+
 
 # ---------------------------------------------------------------------------
 # View 2: Entity History
 # ---------------------------------------------------------------------------
+# Last 10-15 events leading up to (and including) a flagged event, shown by
+# the Anomaly Replay expander below.
+REPLAY_WINDOW_SIZE = 12
+
+
+def _replay_baseline(entity_logs_sorted, window_start_ts):
+    """Established behavior strictly before a replay window's first event --
+    same "don't let the incident's own events leak into its own baseline"
+    idea classification/rules.py's _established_baseline uses, kept as a
+    small local helper here since this view only needs the resulting
+    resource/source_ip/hour sets, not that module's full rule machinery.
+    Falls back to the entity's whole history if there's no prior history at
+    all (e.g. the flagged event is very early in the entity's timeline), so
+    a thin baseline doesn't make every field read as novel by default."""
+    prior = entity_logs_sorted[entity_logs_sorted["timestamp"] < window_start_ts]
+    if prior.empty:
+        prior = entity_logs_sorted
+    return {
+        "resources": set(prior["resource_accessed"]),
+        "source_ips": set(prior["source_ip"]),
+        "hours": set(prior["timestamp"].dt.hour),
+    }
+
+
+def _replay_change_notes(row, baseline):
+    """One-line, plain-English deviations of a single event from the
+    baseline computed by _replay_baseline -- the per-card note in the replay
+    below."""
+    notes = []
+    if row["resource_accessed"] not in baseline["resources"]:
+        notes.append("new resource never seen before")
+    if baseline["hours"]:
+        hour = row["timestamp"].hour
+        if hour not in baseline["hours"]:
+            typical_hours = sorted(baseline["hours"])
+            notes.append(f"unusual hour: {hour:02d}:00 vs typical {typical_hours[0]:02d}:00-{typical_hours[-1]:02d}:00")
+    if row["source_ip"] not in baseline["source_ips"]:
+        notes.append("new source_ip")
+    return notes
+
+
+def _render_replay_step_card(row, notes, is_flagged, explanation=None):
+    """One frame of the replay: a small card for one event, red-bordered and
+    labeled if it's the flagged event itself."""
+    ts = row["timestamp"]
+    ts_str = ts.strftime("%Y-%m-%d %H:%M:%S") if hasattr(ts, "strftime") else str(ts)
+    resource = html.escape(str(row["resource_accessed"]))
+    note_text = html.escape(" · ".join(notes)) if notes else "consistent with established baseline"
+
+    if is_flagged:
+        border = f"2px solid {palette.COLOR_CRITICAL}"
+        label_html = (
+            f'<div style="color:{palette.COLOR_CRITICAL}; font-weight:700; font-size:0.75rem; '
+            f'text-transform:uppercase; letter-spacing:0.04em; margin-bottom:4px;">🚩 Flagged event</div>'
+        )
+        explanation_html = (
+            f'<div style="margin-top:8px; color: var(--text-primary); font-size:0.92rem;">{html.escape(str(explanation))}</div>'
+            if explanation else ""
+        )
+    else:
+        border = "1px solid var(--border)"
+        label_html = ""
+        explanation_html = ""
+
+    st.markdown(
+        f"""
+        <div style="background: var(--surface-1); border: {border}; border-radius: 8px;
+                    padding: 10px 16px; margin-bottom: 6px;">
+          {label_html}
+          <div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:12px;">
+            <span style="color: var(--text-secondary); font-family: monospace; font-size:0.85rem;">{ts_str}</span>
+            <span style="color: var(--text-primary); font-weight:600;">{resource}</span>
+          </div>
+          <div style="color: var(--text-muted); font-size:0.85rem; margin-top:4px;">{note_text}</div>
+          {explanation_html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_anomaly_replay(entity_logs_sorted, flagged_alert, window_size=REPLAY_WINDOW_SIZE):
+    """Frame-by-frame reconstruction of the events leading up to one flagged
+    alert: the last `window_size` events for this entity ending at the
+    flagged event, each annotated with how it deviated from the entity's
+    established baseline at that point in time."""
+    positions = {eid: i for i, eid in enumerate(entity_logs_sorted["event_id"])}
+    flagged_event_id = flagged_alert["event_id"]
+    if flagged_event_id not in positions:
+        st.caption(f"event_id={flagged_event_id} not found in access_logs.csv for this entity.")
+        return
+
+    idx = positions[flagged_event_id]
+    start = max(0, idx - window_size + 1)
+    window = entity_logs_sorted.iloc[start:idx + 1]
+    baseline = _replay_baseline(entity_logs_sorted, window.iloc[0]["timestamp"])
+
+    st.markdown(
+        f"**{flagged_alert['anomaly_type']}** flagged at risk_score={flagged_alert['risk_score']:.4f} "
+        f"(event_id={flagged_event_id}) -- the {len(window)} events leading up to it:"
+    )
+    for _, row in window.iterrows():
+        is_flagged_row = row["event_id"] == flagged_event_id
+        notes = _replay_change_notes(row, baseline)
+        _render_replay_step_card(
+            row, notes, is_flagged_row,
+            explanation=flagged_alert["explanation"] if is_flagged_row else None,
+        )
+
+
 def render_entity_history():
     st.header("Entity History")
     st.caption("Recent event timeline for one entity, with baseline behavior (typical resources, typical login hours) compared against any flagged events.")
@@ -353,6 +536,14 @@ def render_entity_history():
             width="stretch", hide_index=True,
             column_config={"risk_score": st.column_config.NumberColumn(format="%.4f")},
         )
+
+        with st.expander("Replay: how the risk score evolved", expanded=False):
+            replay_source = entity_logs.sort_values("timestamp").reset_index(drop=True)
+            replay_alerts = flagged_rows.sort_values("timestamp")
+            for i, (_, flagged_alert) in enumerate(replay_alerts.iterrows()):
+                _render_anomaly_replay(replay_source, flagged_alert)
+                if i < len(replay_alerts) - 1:
+                    st.divider()
 
 
 # ---------------------------------------------------------------------------
