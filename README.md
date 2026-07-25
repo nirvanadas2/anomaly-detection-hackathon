@@ -14,6 +14,19 @@ taking on new responsibilities get mistaken for an attacker?), and one replays
 the dataset as a live event-by-event feed to demonstrate real-time deployment
 feasibility.
 
+## Live demo
+
+There are two separate, linked artifacts: `docs/index.html` is a standalone
+marketing/landing page (project overview, pitch, and an illustrated walk-
+through of the detection pipeline) meant to be served statically via GitHub
+Pages -- open it directly in a browser, no server required. `dashboard/app.py`
+is the actual working analyst tool: run it with `streamlit run dashboard/app.py`
+after the pipeline has produced its output (or use a deployed Streamlit
+Community Cloud URL, if one exists). Each links to the other -- the landing
+page's "Launch live dashboard" button in the nav and hero, and the
+dashboard's sidebar "← Project overview" link -- so a visitor can move
+between the pitch and the real tool in either direction.
+
 ## Quickstart
 
 ```bash

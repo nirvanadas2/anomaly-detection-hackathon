@@ -1,0 +1,7 @@
+# Environment / secrets -- never commit real keys. .env.example is the
+# checked-in template; everything else matching these patterns is local-only.
+.env
+.env.local
+.env.*.local
+*.env
+!.env.example

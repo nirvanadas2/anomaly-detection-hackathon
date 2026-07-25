@@ -1,0 +1,1287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Redlight Greenlight — Behavioral Anomaly Detection for Access Logs</title>
+<meta name="description" content="Redlight Greenlight: an unsupervised LSTM-based insider-threat detection pipeline: per-entity behavioral baselines, six classified attack patterns, and an explainable risk score.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0a0d13;
+  --bg-elevated:#12161f;
+  --bg-card:#151a24;
+  --border:#232838;
+  --text-primary:#e7ecf3;
+  --text-secondary:#8b99ae;
+  --text-tertiary:#5a6579;
+  --baseline:#4fd1c5;
+  --flag:#e8a33d;
+  --critical:#e5484d;
+  --term:#3ddc84;
+}
+
+*{box-sizing:border-box;margin:0;padding:0;}
+html{scroll-behavior:smooth;overflow-x:hidden;}
+@media (prefers-reduced-motion: reduce){ html{scroll-behavior:auto;} }
+
+body{
+  background:var(--bg);
+  color:var(--text-primary);
+  font-family:'IBM Plex Mono', monospace;
+  font-size:15px;
+  line-height:1.6;
+  min-height:100vh;
+  position:relative;
+  overflow-x:hidden;
+}
+
+h1,h2,h3,h4{
+  font-family:'Space Grotesk', sans-serif;
+  font-weight:600;
+  letter-spacing:-0.01em;
+}
+
+a{color:inherit;text-decoration:none;}
+
+/* background layers */
+.bg-grid{
+  position:fixed;inset:0;z-index:0;pointer-events:none;
+  background-image:
+    repeating-linear-gradient(0deg, rgba(139,153,174,0.05) 0px, rgba(139,153,174,0.05) 1px, transparent 1px, transparent 40px),
+    repeating-linear-gradient(90deg, rgba(139,153,174,0.05) 0px, rgba(139,153,174,0.05) 1px, transparent 1px, transparent 40px);
+}
+.bg-glow{
+  position:fixed;inset:0;z-index:0;pointer-events:none;
+  background:
+    radial-gradient(600px circle at 8% 8%, rgba(79,209,197,0.10), transparent 60%),
+    radial-gradient(600px circle at 92% 5%, rgba(232,163,61,0.08), transparent 60%);
+}
+.scanlines{
+  position:fixed;inset:0;z-index:60;pointer-events:none;
+  background:repeating-linear-gradient(0deg, rgba(255,255,255,0.035) 0px, rgba(255,255,255,0.035) 1px, transparent 1px, transparent 3px);
+  mix-blend-mode:overlay;
+  opacity:0.5;
+}
+.vignette{
+  position:fixed;inset:0;z-index:59;pointer-events:none;
+  box-shadow:inset 0 0 180px rgba(0,0,0,0.65);
+}
+
+.wrap{position:relative;z-index:1;}
+.container{max-width:1180px;margin:0 auto;padding:0 24px;}
+
+/* nav */
+nav{
+  position:sticky;top:0;z-index:50;
+  background:rgba(10,13,19,0.85);
+  backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--border);
+}
+nav .container{display:flex;align-items:center;justify-content:space-between;height:64px;gap:16px;}
+.wordmark{display:flex;align-items:center;gap:12px;font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:1.15rem;letter-spacing:0.06em;flex-shrink:0;white-space:nowrap;}
+.wordmark-short{display:none;}
+@media (max-width:640px){
+  .wordmark-full{display:none;}
+  .wordmark-short{display:inline;}
+}
+.live-status{display:flex;align-items:center;gap:6px;font-size:0.65rem;color:var(--term);letter-spacing:0.08em;font-family:'IBM Plex Mono',monospace;}
+.live-dot{width:6px;height:6px;border-radius:50%;background:var(--term);box-shadow:0 0 6px var(--term);animation:pulse-dot 1.8s ease-in-out infinite;}
+@keyframes pulse-dot{0%,100%{opacity:1;}50%{opacity:0.25;}}
+@media (prefers-reduced-motion: reduce){.live-dot{animation:none;}}
+
+.nav-links{display:flex;align-items:center;gap:20px;flex-wrap:nowrap;font-size:0.75rem;color:var(--text-secondary);flex-shrink:0;}
+.nav-links a{transition:color .15s;white-space:nowrap;}
+.nav-links a:hover{color:var(--baseline);}
+.nav-cta{
+  background:var(--flag);color:#1a1206;font-weight:600;font-size:0.78rem;
+  padding:9px 16px;border-radius:4px;white-space:nowrap;
+  font-family:'IBM Plex Mono',monospace;letter-spacing:0.02em;
+  transition:filter .15s;flex-shrink:0;display:inline-flex;align-items:center;
+}
+.nav-cta:hover{filter:brightness(1.1);}
+.cta-short{display:none;}
+@media (max-width:820px){
+  .nav-cta{padding:8px 12px;}
+  .cta-full{display:none;}
+  .cta-short{display:inline;}
+}
+
+@media (max-width:767px){
+  .nav-links{display:none;}
+}
+
+/* dashboard launch buttons + localhost tooltip */
+.dash-btn-wrap{position:relative;display:inline-flex;}
+.dash-tooltip{
+  position:absolute;top:calc(100% + 8px);right:0;left:auto;transform:translateY(-4px);
+  max-width:min(220px, calc(100vw - 48px));width:max-content;
+  background:var(--bg-elevated);border:1px solid var(--border);color:var(--text-secondary);
+  font-size:0.68rem;line-height:1.4;padding:8px 10px;border-radius:5px;white-space:normal;
+  opacity:0;pointer-events:none;transition:opacity .15s, transform .15s;z-index:20;
+  box-shadow:0 8px 20px rgba(0,0,0,0.4);
+}
+.dash-tooltip code{color:var(--baseline);}
+.dash-btn-wrap:hover .dash-tooltip{opacity:1;transform:translateY(0);}
+.dash-btn-wrap.hero-wrap .dash-tooltip{right:auto;left:0;}
+.local-badge{
+  display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--flag);
+  margin-left:8px;box-shadow:0 0 6px var(--flag);vertical-align:middle;
+}
+
+/* eyebrow / section headers */
+.eyebrow{
+  color:var(--baseline);font-size:0.78rem;letter-spacing:0.08em;
+  font-family:'IBM Plex Mono',monospace;margin-bottom:10px;font-weight:500;
+}
+.eyebrow::before{content:"> ";color:var(--term);}
+section{padding:88px 0;position:relative;border-bottom:1px solid var(--border);}
+.section-head{max-width:680px;margin-bottom:44px;}
+.section-head h2{font-size:1.9rem;margin-bottom:12px;}
+.section-head p{color:var(--text-secondary);font-size:0.95rem;}
+
+/* hero */
+#hero{padding:0;border-bottom:1px solid var(--border);position:relative;min-height:92vh;display:flex;align-items:center;overflow:hidden;}
+#hero-canvas{position:absolute;inset:0;z-index:0;}
+.hero-inner{position:relative;z-index:2;width:100%;padding:120px 0 80px;}
+.hero-inner .container{display:flex;flex-direction:column;align-items:flex-start;gap:26px;}
+.hero-tag{
+  display:inline-flex;align-items:center;gap:8px;
+  border:1px solid var(--border);background:rgba(21,26,36,0.7);
+  padding:6px 12px;border-radius:20px;font-size:0.72rem;color:var(--text-secondary);
+  letter-spacing:0.04em;
+}
+.hero-tag .dot{width:6px;height:6px;border-radius:50%;background:var(--flag);}
+h1.headline{
+  font-size:clamp(2.1rem, 5.2vw, 3.6rem);
+  line-height:1.08;max-width:820px;
+  text-shadow:0 0 40px rgba(79,209,197,0.15);
+}
+h1.headline .accent{color:var(--baseline);}
+.hero-sub{color:var(--text-secondary);font-size:1rem;max-width:600px;}
+.hero-actions{display:flex;gap:14px;flex-wrap:wrap;margin-top:6px;}
+.btn{
+  padding:13px 24px;border-radius:4px;font-family:'IBM Plex Mono',monospace;
+  font-size:0.85rem;font-weight:600;letter-spacing:0.02em;display:inline-flex;align-items:center;gap:8px;
+  transition:filter .15s, transform .15s;border:1px solid transparent;
+}
+.btn:hover{transform:translateY(-1px);}
+.btn-primary{background:var(--baseline);color:#04211e;}
+.btn-primary:hover{filter:brightness(1.1);}
+.btn-outline{border-color:var(--border);color:var(--text-primary);background:rgba(21,26,36,0.5);}
+.btn-outline:hover{border-color:var(--baseline);color:var(--baseline);}
+
+.hero-stats{display:flex;gap:0;flex-wrap:wrap;margin-top:36px;border-top:1px solid var(--border);padding-top:24px;width:100%;max-width:820px;}
+.hero-stat{padding-right:36px;margin-right:36px;border-right:1px solid var(--border);}
+.hero-stat:last-child{border-right:none;}
+.hero-stat .num{font-family:'Space Grotesk',sans-serif;font-size:1.6rem;font-weight:700;color:var(--baseline);}
+.hero-stat .lbl{font-size:0.72rem;color:var(--text-tertiary);letter-spacing:0.03em;margin-top:2px;}
+
+/* hud frame panels */
+.hud-frame{
+  position:relative;background:var(--bg-card);border:1px solid var(--border);
+  border-radius:2px;padding:36px;
+}
+.hud-frame::before,.hud-frame::after,.hud-frame .hc-tl,.hud-frame .hc-br{content:"";}
+.hud-frame .corner{position:absolute;width:22px;height:22px;border-color:var(--flag);pointer-events:none;}
+.hud-frame .corner.tl{top:-1px;left:-1px;border-top:2px solid var(--flag);border-left:2px solid var(--flag);}
+.hud-frame .corner.tr{top:-1px;right:-1px;border-top:2px solid var(--flag);border-right:2px solid var(--flag);}
+.hud-frame .corner.bl{bottom:-1px;left:-1px;border-bottom:2px solid var(--flag);border-left:2px solid var(--flag);}
+.hud-frame .corner.br{bottom:-1px;right:-1px;border-bottom:2px solid var(--flag);border-right:2px solid var(--flag);}
+
+/* brief */
+.brief-quote{
+  font-family:'Space Grotesk',sans-serif;font-size:1.15rem;line-height:1.55;
+  color:var(--text-primary);border-left:2px solid var(--baseline);padding-left:20px;margin-bottom:32px;
+}
+.brief-quote .hl{color:var(--baseline);}
+.constraint-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:14px;}
+.constraint-card{
+  background:var(--bg-elevated);border:1px solid var(--border);border-radius:6px;padding:16px 14px;
+}
+.constraint-card .idx{color:var(--flag);font-size:0.7rem;letter-spacing:0.06em;margin-bottom:8px;}
+.constraint-card h4{font-size:0.88rem;margin-bottom:6px;color:var(--text-primary);}
+.constraint-card p{font-size:0.78rem;color:var(--text-secondary);}
+@media (max-width:900px){.constraint-grid{grid-template-columns:repeat(2,1fr);}}
+@media (max-width:600px){.constraint-grid{grid-template-columns:1fr;}}
+
+/* signal system */
+.signal-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;}
+.signal-card{background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:24px;border-top:3px solid var(--c);}
+.signal-card .sw{width:14px;height:14px;border-radius:50%;background:var(--c);box-shadow:0 0 12px var(--c);margin-bottom:14px;}
+.signal-card h3{font-size:1.05rem;margin-bottom:8px;color:var(--c);}
+.signal-card p{color:var(--text-secondary);font-size:0.85rem;}
+@media (max-width:800px){.signal-grid{grid-template-columns:1fr;}}
+
+/* pipeline */
+.pipeline{display:grid;grid-template-columns:repeat(4,1fr);gap:0;position:relative;}
+.pipeline::before{
+  content:"";position:absolute;top:26px;left:6%;right:6%;height:1px;
+  background:repeating-linear-gradient(90deg, var(--border) 0 6px, transparent 6px 12px);z-index:0;
+}
+.pipe-step{position:relative;z-index:1;padding:0 14px;text-align:left;}
+.pipe-num{
+  width:52px;height:52px;border-radius:50%;background:var(--bg-elevated);border:1px solid var(--baseline);
+  color:var(--baseline);display:flex;align-items:center;justify-content:center;font-family:'Space Grotesk',sans-serif;
+  font-weight:700;font-size:1.2rem;margin-bottom:16px;
+}
+.pipe-step h4{font-size:1rem;margin-bottom:6px;}
+.pipe-step p{font-size:0.8rem;color:var(--text-secondary);}
+@media (max-width:800px){.pipeline{grid-template-columns:1fr;gap:28px;}.pipeline::before{display:none;}}
+
+/* detections */
+.det-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;}
+.det-card{
+  background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:22px;
+  transition:border-color .15s;
+}
+.det-card:hover{border-color:var(--critical);}
+.tag{
+  display:inline-block;font-size:0.68rem;letter-spacing:0.05em;color:var(--critical);
+  border:1px solid rgba(229,72,77,0.35);background:rgba(229,72,77,0.08);
+  padding:3px 8px;border-radius:3px;font-family:'IBM Plex Mono',monospace;vertical-align:middle;
+}
+.det-card .tag{display:inline-block;margin-bottom:12px;}
+.det-card h3{font-size:1rem;margin-bottom:8px;}
+.det-card p{font-size:0.82rem;color:var(--text-secondary);}
+@media (max-width:900px){.det-grid{grid-template-columns:repeat(2,1fr);}}
+@media (max-width:600px){.det-grid{grid-template-columns:1fr;}}
+
+/* deliverables / eval */
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:48px;}
+.checklist{list-style:none;}
+.checklist li{
+  display:flex;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);font-size:0.88rem;
+}
+.checklist li:last-child{border-bottom:none;}
+.checklist .check{color:var(--term);font-weight:700;flex-shrink:0;}
+.tag-pills{display:flex;flex-wrap:wrap;gap:10px;}
+.pill{
+  border:1px solid var(--border);background:var(--bg-elevated);color:var(--text-secondary);
+  padding:9px 14px;border-radius:20px;font-size:0.78rem;line-height:1.3;
+}
+@media (max-width:800px){.two-col{grid-template-columns:1fr;gap:36px;}}
+
+/* replay */
+.replay-header{
+  display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:10px;margin-bottom:22px;
+  padding-bottom:16px;border-bottom:1px solid var(--border);
+}
+.replay-header .entity{font-family:'Space Grotesk',sans-serif;font-weight:700;color:var(--flag);font-size:1.1rem;}
+.replay-header .meta{font-size:0.78rem;color:var(--text-tertiary);}
+.replay-baseline-note{
+  font-size:0.82rem;color:var(--baseline);background:rgba(79,209,197,0.06);
+  border:1px solid rgba(79,209,197,0.2);border-radius:6px;padding:10px 14px;margin-bottom:20px;
+}
+.replay-track{display:flex;flex-direction:column;gap:8px;}
+.replay-card{
+  display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;
+  background:var(--bg-elevated);border:1px solid var(--border);border-radius:6px;padding:12px 16px;
+  font-size:0.82rem;
+}
+.replay-card .ts{color:var(--text-tertiary);white-space:nowrap;}
+.replay-card .res{color:var(--text-primary);font-weight:600;}
+.replay-card .note{color:var(--flag);font-size:0.76rem;}
+.replay-card.final{
+  border-left:3px solid var(--critical);border-color:var(--critical);background:rgba(229,72,77,0.06);
+}
+.replay-card.final .res{color:var(--critical);}
+.replay-arrow{color:var(--text-tertiary);text-align:center;font-size:0.75rem;}
+.rule-explain{
+  margin-top:24px;background:var(--bg-elevated);border:1px solid var(--border);border-left:3px solid var(--critical);
+  border-radius:6px;padding:16px 18px;font-size:0.82rem;color:var(--text-secondary);
+}
+.rule-explain .lbl{color:var(--critical);font-weight:600;letter-spacing:0.04em;font-size:0.7rem;display:block;margin-bottom:8px;}
+.rule-explain code{color:var(--text-primary);}
+
+/* AI triage copilot */
+.triage-live-tag{
+  display:inline-flex;align-items:center;gap:7px;color:var(--term);font-size:0.7rem;
+  letter-spacing:0.06em;font-family:'IBM Plex Mono',monospace;margin-bottom:20px;
+}
+.triage-header{
+  display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:24px;
+  padding-bottom:16px;border-bottom:1px solid var(--border);
+}
+.triage-header .event-id{
+  display:inline-flex;align-items:center;gap:10px;flex-wrap:wrap;
+  font-family:'Space Grotesk',sans-serif;font-weight:700;color:var(--flag);font-size:1.1rem;
+}
+.triage-header .model-tag{font-size:0.72rem;color:var(--text-tertiary);}
+.triage-rows{display:flex;flex-direction:column;gap:20px;}
+.triage-row .row-label{
+  font-size:0.72rem;text-transform:uppercase;letter-spacing:0.05em;color:var(--text-tertiary);margin-bottom:6px;
+}
+.triage-row .row-value{font-size:0.92rem;color:var(--text-primary);line-height:1.55;}
+.triage-row.confidence .row-value{color:var(--critical);font-weight:700;text-transform:capitalize;}
+.triage-caption{margin-top:20px;font-size:0.78rem;color:var(--text-tertiary);border-top:1px solid var(--border);padding-top:14px;}
+
+/* globe section */
+#globe-panel .globe-wrap{
+  position:relative;height:560px;border:1px solid var(--border);border-radius:6px;overflow:hidden;
+  background:var(--bg-elevated);margin-bottom:18px;cursor:grab;
+}
+#globe-panel .globe-wrap.grabbing{cursor:grabbing;}
+#globe-canvas{width:100%;height:100%;display:block;}
+.globe-hint{
+  position:absolute;top:14px;left:14px;font-size:0.7rem;color:var(--text-tertiary);
+  background:rgba(10,13,19,0.6);padding:6px 10px;border-radius:4px;letter-spacing:0.03em;pointer-events:none;
+}
+.globe-legend{
+  position:absolute;bottom:14px;left:14px;display:flex;flex-direction:column;gap:5px;
+  font-size:0.68rem;color:var(--text-secondary);background:rgba(10,13,19,0.72);padding:10px 12px;border-radius:4px;
+  pointer-events:none;max-width:200px;
+}
+.globe-legend .row{display:flex;align-items:center;gap:8px;}
+.globe-legend .sw-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;box-shadow:0 0 6px currentColor;background:currentColor;}
+.globe-legend .sw-line{width:16px;height:2px;flex-shrink:0;background:linear-gradient(90deg,#6da7ec,#0d366b);box-shadow:0 0 6px #3987e5;}
+.globe-legend .divider{height:1px;background:var(--border);margin:4px 0;}
+.globe-caption{font-size:0.82rem;color:var(--text-secondary);}
+@media (max-width:700px){#globe-panel .globe-wrap{height:400px;}}
+
+/* roadmap */
+.roadmap-list{list-style:none;counter-reset:rm;}
+.roadmap-list li{
+  counter-increment:rm;display:flex;gap:18px;padding:18px 0;border-bottom:1px solid var(--border);
+}
+.roadmap-list li:last-child{border-bottom:none;}
+.roadmap-list li::before{
+  content:counter(rm,decimal-leading-zero);font-family:'Space Grotesk',sans-serif;font-weight:700;
+  color:var(--text-tertiary);font-size:0.85rem;flex-shrink:0;padding-top:2px;
+}
+.roadmap-list h4{font-size:0.92rem;margin-bottom:4px;color:var(--text-primary);}
+.roadmap-list p{font-size:0.82rem;color:var(--text-secondary);}
+
+/* final CTA + footer */
+#final-cta{text-align:center;border-bottom:none;}
+#final-cta h2{font-size:2rem;margin-bottom:16px;}
+#final-cta p{color:var(--text-secondary);max-width:520px;margin:0 auto 28px;}
+#final-cta .hero-actions{justify-content:center;}
+
+footer{padding:36px 0;color:var(--text-tertiary);font-size:0.78rem;}
+footer .container{display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;align-items:center;}
+footer a:hover{color:var(--baseline);}
+
+@media (max-width:600px){
+  section{padding:56px 0;}
+  .hud-frame{padding:20px;}
+  #hero{min-height:auto;}
+  .hero-inner{padding:100px 0 56px;}
+}
+</style>
+</head>
+<body>
+
+<div class="bg-grid"></div>
+<div class="bg-glow"></div>
+<div class="scanlines"></div>
+<div class="vignette"></div>
+
+<div class="wrap">
+
+<nav>
+  <div class="container">
+    <div class="wordmark" aria-label="Redlight Greenlight">
+      <span class="wordmark-full" aria-hidden="true">REDLIGHT GREENLIGHT</span>
+      <span class="wordmark-short" aria-hidden="true">RLGL</span>
+      <span class="live-status"><span class="live-dot"></span>LIVE</span>
+    </div>
+    <div class="nav-links" id="nav-links">
+      <a href="#map">Attack Map</a>
+      <a href="#replay">Replay</a>
+      <a href="#triage">AI Triage Copilot</a>
+    </div>
+    <span class="dash-btn-wrap" id="nav-dash-wrap">
+      <a class="nav-cta" id="nav-dash-btn" href="#" target="_blank" rel="noopener">
+        <span class="cta-full">Launch live dashboard →</span>
+        <span class="cta-short">Dashboard →</span>
+      </a>
+      <span class="dash-tooltip" id="nav-dash-tooltip"></span>
+    </span>
+  </div>
+</nav>
+
+<!-- HERO -->
+<section id="hero">
+  <canvas id="hero-canvas"></canvas>
+  <div class="hero-inner">
+    <div class="container">
+      <div class="hero-tag"><span class="dot"></span>UNSUPERVISED · EXPLAINABLE · REAL-TIME</div>
+      <h1 class="headline">See the <span class="accent">attack path</span>, not just the score.</h1>
+      <p class="hero-sub">
+        Redlight Greenlight learns what "normal" looks like for every user, service account, and device in an
+        access-log stream — then reconstructs anomalies frame by frame, so an analyst can see exactly
+        which events broke the baseline and why, not just a number.
+      </p>
+      <div class="hero-actions">
+        <span class="dash-btn-wrap hero-wrap" id="hero-dash-wrap">
+          <a class="btn btn-primary" id="hero-dash-btn" href="#" target="_blank" rel="noopener">Launch live dashboard →</a>
+          <span class="dash-tooltip" id="hero-dash-tooltip"></span>
+        </span>
+        <a class="btn btn-outline" href="#replay">Watch a replay ↓</a>
+        <a class="btn btn-outline" href="#map">Explore the attack map ↓</a>
+      </div>
+      <div class="hero-stats">
+        <div class="hero-stat"><div class="num">6</div><div class="lbl">anomaly classes</div></div>
+        <div class="hero-stat"><div class="num">300</div><div class="lbl">entities profiled</div></div>
+        <div class="hero-stat"><div class="num">0.8847</div><div class="lbl">risk score ROC-AUC</div></div>
+        <div class="hero-stat"><div class="num">0.565ms</div><div class="lbl">avg. scoring latency</div></div>
+        <div class="hero-stat"><div class="num">1.37%</div><div class="lbl">anomalous of 48k events</div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- THE BRIEF -->
+<section id="brief">
+  <div class="container">
+    <div class="section-head">
+      <div class="eyebrow">the assignment</div>
+      <h2>Behavioral anomaly detection, from raw logs to a risk score</h2>
+    </div>
+    <div class="hud-frame">
+      <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+      <div class="brief-quote">
+        Build an <span class="hl">AI-powered behavioral anomaly detection</span> system for cybersecurity access logs.
+        Model <span class="hl">"normal" access behavior</span> per user, service account, and device — then
+        detect and classify anomalies in <span class="hl">near real-time</span>, surfacing each one with an
+        <span class="hl">explainable risk score</span> an analyst can actually act on.
+      </div>
+      <div class="constraint-grid">
+        <div class="constraint-card">
+          <div class="idx">CONSTRAINT 01</div>
+          <h4>Sequential data</h4>
+          <p>Access events are ordered per-entity time series, not i.i.d. rows — behavior only makes sense in context.</p>
+        </div>
+        <div class="constraint-card">
+          <div class="idx">CONSTRAINT 02</div>
+          <h4>Extreme class imbalance</h4>
+          <p>Anomalies are ~1% of events. A model that predicts "normal" for everything scores deceptively well.</p>
+        </div>
+        <div class="constraint-card">
+          <div class="idx">CONSTRAINT 03</div>
+          <h4>Concept drift</h4>
+          <p>Legitimate behavior shifts over weeks — new responsibilities, new resources — and shouldn't trip alerts.</p>
+        </div>
+        <div class="constraint-card">
+          <div class="idx">CONSTRAINT 04</div>
+          <h4>Explainability</h4>
+          <p>A bare risk score isn't actionable. Every alert needs a human-readable reason it fired.</p>
+        </div>
+        <div class="constraint-card">
+          <div class="idx">CONSTRAINT 05</div>
+          <h4>Cold start</h4>
+          <p>New entities have no history yet a baseline is still needed from day one.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- SIGNAL SYSTEM -->
+<section id="signals">
+  <div class="container">
+    <div class="section-head">
+      <div class="eyebrow">traffic light system</div>
+      <h2>Every alert gets a light</h2>
+      <p>Every view in the dashboard — and every panel on this page — uses the same three colors to mean the same three things. Every login gets a light. Most stay green. A few need a second look.</p>
+    </div>
+    <div class="signal-grid">
+      <div class="signal-card" style="--c:var(--baseline);">
+        <div class="sw"></div>
+        <h3>Green light</h3>
+        <p>Baseline behavior consistent with this entity's learned profile — typical resources, hours, devices, and locations. No action needed.</p>
+      </div>
+      <div class="signal-card" style="--c:var(--flag);">
+        <div class="sw"></div>
+        <h3>Yellow light</h3>
+        <p>Flagged: risk score in the top alert budget, or a rule matched — worth an analyst's attention, not yet a confirmed incident.</p>
+      </div>
+      <div class="signal-card" style="--c:var(--critical);">
+        <div class="sw"></div>
+        <h3>Red light</h3>
+        <p>Critical: classified against a specific attack pattern with an explanation — a confirmed anomaly type, ready to escalate.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- PIPELINE -->
+<section id="pipeline">
+  <div class="container">
+    <div class="section-head">
+      <div class="eyebrow">how it works</div>
+      <h2>Four stages, one event at a time</h2>
+    </div>
+    <div class="pipeline">
+      <div class="pipe-step">
+        <div class="pipe-num">01</div>
+        <h4>Ingest</h4>
+        <p>Access events stream in per entity — user, service account, or device — preserving sequence order.</p>
+      </div>
+      <div class="pipe-step">
+        <div class="pipe-num">02</div>
+        <h4>Score</h4>
+        <p>An unsupervised LSTM autoencoder over sliding event windows produces a reconstruction-error risk score, backed by a cold-start baseline and rolling drift recalibration.</p>
+      </div>
+      <div class="pipe-step">
+        <div class="pipe-num">03</div>
+        <h4>Classify</h4>
+        <p>The top slice of risk_score events run through six rule-based checks, each independently deciding whether — and which — attack pattern matched.</p>
+      </div>
+      <div class="pipe-step">
+        <div class="pipe-num">04</div>
+        <h4>Explain</h4>
+        <p>Every alert carries a plain-language explanation string: which features fired, what threshold was crossed, and why.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- DETECTIONS -->
+<section id="detections">
+  <div class="container">
+    <div class="section-head">
+      <div class="eyebrow">what it catches</div>
+      <h2>Six classified attack patterns</h2>
+      <p>Each rule looks only at an entity's own history at or before its timestamp — no future knowledge, no peeking across entities except where the pattern itself is inherently cross-entity.</p>
+    </div>
+    <div class="det-grid">
+      <div class="det-card">
+        <span class="tag">AUTH</span>
+        <h3>Brute force</h3>
+        <p>A burst of failed auth attempts from one source_ip against one entity within a short window — worse if that IP has never been seen for this entity before.</p>
+      </div>
+      <div class="det-card">
+        <span class="tag">AUTH</span>
+        <h3>Credential stuffing</h3>
+        <p>The cross-entity signature: many different entities, mostly failing auth, hit from a small cluster of related source IPs in the same window.</p>
+      </div>
+      <div class="det-card">
+        <span class="tag">IDENTITY</span>
+        <h3>Credential misuse</h3>
+        <p>A login that's novel on every axis at once — new device, new geo_location, and an off-hours timestamp this entity almost never uses — evaluated jointly, not separately.</p>
+      </div>
+      <div class="det-card">
+        <span class="tag">DEVICE</span>
+        <h3>Device spoofing</h3>
+        <p>Access claiming an established identity but arriving from device or fingerprint characteristics that don't match this entity's known device history.</p>
+      </div>
+      <div class="det-card">
+        <span class="tag">GEO</span>
+        <h3>Impossible travel</h3>
+        <p>Geo-velocity between two consecutive events for the same entity exceeds any plausible travel speed — compounded if the device fingerprint changed too.</p>
+      </div>
+      <div class="det-card">
+        <span class="tag">MOVEMENT</span>
+        <h3>Lateral movement</h3>
+        <p>A short-window chain of resources outside the entity's normal set, escalating toward progressively rarer, higher-value resources.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- DELIVERABLES + EVAL -->
+<section id="deliverables">
+  <div class="container">
+    <div class="section-head">
+      <div class="eyebrow">scope</div>
+      <h2>Deliverables &amp; evaluation</h2>
+    </div>
+    <div class="two-col">
+      <div>
+        <h3 style="font-size:1rem;margin-bottom:16px;color:var(--text-secondary);letter-spacing:0.04em;">REQUIRED DELIVERABLES</h3>
+        <ul class="checklist">
+          <li><span class="check">✓</span>Synthetic access-log data generator (300 entities, 45 days)</li>
+          <li><span class="check">✓</span>Baseline behavioral profiling model (cold-start fallback)</li>
+          <li><span class="check">✓</span>LSTM sequence-based detection model</li>
+          <li><span class="check">✓</span>Rule-based anomaly classification into 6 attack types</li>
+          <li><span class="check">✓</span>Explainability layer (per-alert human-readable reasoning)</li>
+          <li><span class="check">✓</span>Interactive analyst dashboard</li>
+          <li><span class="check">✓</span>Written report of methodology &amp; results</li>
+        </ul>
+      </div>
+      <div>
+        <h3 style="font-size:1rem;margin-bottom:16px;color:var(--text-secondary);letter-spacing:0.04em;">EVALUATION CRITERIA</h3>
+        <div class="tag-pills">
+          <span class="pill">Detection accuracy on imbalanced labels</span>
+          <span class="pill">Correct anomaly-type classification</span>
+          <span class="pill">False positive rate at top-1% alert budget</span>
+          <span class="pill">Explainability / analyst usability</span>
+          <span class="pill">Cold-start &amp; concept drift handling</span>
+          <span class="pill">Scalability / real-time streaming</span>
+          <span class="pill">Report clarity</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- REPLAY -->
+<section id="replay">
+  <div class="container">
+    <div class="section-head">
+      <div class="eyebrow">explainability in action</div>
+      <h2>Replay: how the risk score evolved</h2>
+      <p>Every flagged alert can be replayed frame by frame — the events leading up to it, each annotated with how it deviated from the entity's established baseline at that point in time.</p>
+    </div>
+    <div class="hud-frame">
+      <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+      <div class="replay-header">
+        <div class="entity">SVC-000009</div>
+        <div class="meta">lateral_movement flagged · 2026-07-08 · 20-minute window</div>
+      </div>
+      <div class="replay-baseline-note">
+        <strong>Established baseline:</strong> this service account normally only touches <code>backup-master-server</code> and <code>ci-cd-pipeline</code>. Nothing else appears in its prior history.
+      </div>
+      <div class="replay-track">
+        <div class="replay-card">
+          <span class="ts">08:00:00</span>
+          <span class="res">device-heartbeat-service</span>
+          <span class="note">new resource never seen before</span>
+        </div>
+        <div class="replay-arrow">↓</div>
+        <div class="replay-card">
+          <span class="ts">08:04:12</span>
+          <span class="res">printer-service</span>
+          <span class="note">new resource never seen before</span>
+        </div>
+        <div class="replay-arrow">↓</div>
+        <div class="replay-card">
+          <span class="ts">08:08:47</span>
+          <span class="res">email</span>
+          <span class="note">new resource never seen before</span>
+        </div>
+        <div class="replay-arrow">↓</div>
+        <div class="replay-card">
+          <span class="ts">08:13:30</span>
+          <span class="res">hr-portal</span>
+          <span class="note">new resource never seen before</span>
+        </div>
+        <div class="replay-arrow">↓</div>
+        <div class="replay-card">
+          <span class="ts">08:16:55</span>
+          <span class="res">hr-portal</span>
+          <span class="note">repeat access, still outside baseline</span>
+        </div>
+        <div class="replay-arrow">↓</div>
+        <div class="replay-card final">
+          <span class="ts">08:20:03</span>
+          <span class="res">🚩 source-code-repo</span>
+          <span class="note">chain complete — flagged event</span>
+        </div>
+      </div>
+      <div class="rule-explain">
+        <span class="lbl">RULE EXPLANATION</span>
+        lateral_movement: accessed <code>6</code> resources outside this entity's normal set within
+        <code>20</code> min (<code>device-heartbeat-service → printer-service → email → hr-portal → hr-portal → source-code-repo</code>),
+        escalating toward less common resources (global access frequency <code>0.083 → 0.006</code>)
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- AI TRIAGE COPILOT -->
+<section id="triage">
+  <div class="container">
+    <div class="section-head">
+      <div class="eyebrow">AI Triage Copilot</div>
+      <h2>A second opinion, generated live</h2>
+      <p>The rule explanations elsewhere on this page are deterministic and pre-computed — the same input always produces the same string. The AI Triage Copilot is different: when an analyst selects any alert in the queue, <code>dashboard/ai_triage.py</code> calls the Groq API fresh, in real time, and drafts a plain-language summary, a recommended response action, and a confidence level. It's a second opinion layer on top of the deterministic detection, not a replacement for it.</p>
+    </div>
+    <div class="hud-frame">
+      <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+      <div class="triage-live-tag"><span class="live-dot"></span>⚡ live · generated on selection</div>
+      <div class="triage-header">
+        <div class="event-id">event_id=EVT-0032871 <span class="tag">lateral_movement</span></div>
+        <div class="model-tag">🤖 llama-3.3-70b-versatile</div>
+      </div>
+      <div class="triage-rows">
+        <div class="triage-row">
+          <div class="row-label">Summary</div>
+          <div class="row-value">SVC-000009 touched six resources it has never accessed before within a 20-minute window, moving from low-value internal tools toward <code>source-code-repo</code> — a chain consistent with lateral movement following a compromised or misused service-account credential.</div>
+        </div>
+        <div class="triage-row">
+          <div class="row-label">Recommended action</div>
+          <div class="row-value">Suspend SVC-000009's active session and rotate its credentials immediately; audit <code>source-code-repo</code> access under this account for the last 30 days.</div>
+        </div>
+        <div class="triage-row confidence">
+          <div class="row-label">Confidence</div>
+          <div class="row-value">High</div>
+        </div>
+      </div>
+      <p class="triage-caption">Illustrative example, continuing the SVC-000009 incident from the replay above — not a live call. In the real dashboard, this panel is generated fresh by Groq every time an analyst selects an alert.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 3D ATTACK MAP -->
+<section id="map">
+  <div class="container">
+    <div class="section-head">
+      <div class="eyebrow">global view</div>
+      <h2>3D attack map</h2>
+      <p>Flagged locations and cross-continent impossible-travel pairs, plotted on a rotating globe. Drag to look around.</p>
+    </div>
+    <div class="hud-frame" id="globe-panel">
+      <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+      <div class="globe-wrap" id="globe-wrap">
+        <canvas id="globe-canvas"></canvas>
+        <div class="globe-hint">drag to rotate</div>
+        <div class="globe-legend" id="globe-legend">
+          <!-- rows injected by JS from the same ANOMALY_TYPE_COLORS mapping as dashboard/palette.py, so this legend can never drift from the dashboard's -->
+        </div>
+      </div>
+      <p class="globe-caption">Points mark cities with flagged access events, colored by anomaly_type — the identical palette used on every view of the live dashboard. The arc is an impossible_travel pair, shaded along the dashboard's sequential risk_score ramp (light = lower risk, dark = higher).</p>
+    </div>
+  </div>
+</section>
+
+<!-- ROADMAP -->
+<section id="roadmap">
+  <div class="container">
+    <div class="section-head">
+      <div class="eyebrow">what's next</div>
+      <h2>Roadmap &amp; known limitations</h2>
+    </div>
+    <ul class="roadmap-list">
+      <li>
+        <div>
+          <h4>Incident-level grouping</h4>
+          <p>Scoring is currently per-event — a single attack chain can surface as several separate flags, and some individual events in a chain go unclassified even when the overall incident is caught.</p>
+        </div>
+      </li>
+      <li>
+        <div>
+          <h4>Low-and-slow exfiltration detection</h4>
+          <p>Not yet built. Current rules are tuned for bursty, short-window behavior; a slow drip of access spread over days needs a different detection strategy.</p>
+        </div>
+      </li>
+      <li>
+        <div>
+          <h4>Insider drift tuning</h4>
+          <p>The concept-drift stress test holds up well (92% correctly read as normal) but the remaining edge cases — genuine first-ever access to a newly available resource — could use tighter tuning.</p>
+        </div>
+      </li>
+      <li>
+        <div>
+          <h4>Analyst feedback loop</h4>
+          <p>Alert dispositions (confirmed / false positive) aren't fed back into scoring or thresholds yet — a natural next step for reducing the alert-queue false positive rate over time.</p>
+        </div>
+      </li>
+      <li>
+        <div>
+          <h4>Cross-entity correlation graph</h4>
+          <p>Detections are per-entity today. Correlating flagged events across entities could surface coordinated or multi-account incidents that no single entity's history would reveal alone.</p>
+        </div>
+      </li>
+      <li>
+        <div>
+          <h4>Production streaming via Kafka</h4>
+          <p>The real-time feasibility demo replays a static CSV as a live feed; a production deployment would sit behind an actual streaming ingestion layer.</p>
+        </div>
+      </li>
+    </ul>
+  </div>
+</section>
+
+<!-- FINAL CTA -->
+<section id="final-cta">
+  <div class="container">
+    <div class="eyebrow" style="justify-content:center;display:flex;">get started</div>
+    <h2>Run the full pipeline in under two minutes</h2>
+    <p>Generate the dataset, train the model, classify alerts, and open the dashboard — one command each.</p>
+    <div class="hero-actions">
+      <a class="btn btn-primary" href="#brief">Read the brief ↑</a>
+      <a class="btn btn-outline" href="#replay">See it explain itself ↑</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="container">
+    <span>REDLIGHT GREENLIGHT — behavioral anomaly detection for access logs</span>
+    <span>Synthetic data · unsupervised LSTM · explainable risk scoring</span>
+  </div>
+</footer>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// Replace this with the real Streamlit Community Cloud URL once the dashboard is deployed.
+const DASHBOARD_URL = "http://localhost:8501";
+
+(function(){
+  "use strict";
+  var reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* ---------------------------------------------------------------
+     "Launch live dashboard" buttons: point at DASHBOARD_URL. While it
+     still points at localhost, show a hover tooltip telling a visitor
+     how to run it themselves instead of silently failing to open.
+  --------------------------------------------------------------- */
+  (function wireDashboardLinks(){
+    var isLocal = /^https?:\/\/localhost/i.test(DASHBOARD_URL) || /^https?:\/\/127\.0\.0\.1/i.test(DASHBOARD_URL);
+    var pairs = [
+      ['nav-dash-btn', 'nav-dash-tooltip'],
+      ['hero-dash-btn', 'hero-dash-tooltip']
+    ];
+    pairs.forEach(function(pair){
+      var btn = document.getElementById(pair[0]);
+      var tip = document.getElementById(pair[1]);
+      if (!btn) return;
+      btn.setAttribute('href', DASHBOARD_URL);
+      if (isLocal && tip) {
+        tip.innerHTML = 'points at <code>localhost:8501</code> — run locally: <code>streamlit run dashboard/app.py</code>';
+      } else if (tip) {
+        tip.innerHTML = 'opens the live dashboard in a new tab';
+      }
+    });
+  })();
+
+  if (typeof THREE === 'undefined') return;
+
+  var CYAN = 0x4fd1c5, AMBER = 0xe8a33d, CRITICAL = 0xe5484d, BORDER = 0x232838, ELEV = 0x12161f;
+
+  // Shared soft-dot sprite texture: a circular radial-gradient canvas, used as
+  // PointsMaterial.map so GL_POINTS render as glowing dots instead of the
+  // default flat squares.
+  function makeRadialDotTexture(size){
+    size = size || 64;
+    var c = document.createElement('canvas');
+    c.width = c.height = size;
+    var ctx = c.getContext('2d');
+    var grad = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2);
+    grad.addColorStop(0, 'rgba(255,255,255,1)');
+    grad.addColorStop(0.5, 'rgba(255,255,255,0.55)');
+    grad.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, size, size);
+    return new THREE.CanvasTexture(c);
+  }
+
+  /* ---------------------------------------------------------------
+     HERO SCENE: scattered point-cloud node network + one pulsing chain
+  --------------------------------------------------------------- */
+  (function heroScene(){
+    var canvas = document.getElementById('hero-canvas');
+    var heroEl = document.getElementById('hero');
+    if (!canvas || !heroEl) return;
+
+    var scene = new THREE.Scene();
+    var camera = new THREE.PerspectiveCamera(60, heroEl.clientWidth / heroEl.clientHeight, 0.1, 1000);
+    camera.position.set(0, 0, 42);
+
+    var renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setSize(heroEl.clientWidth, heroEl.clientHeight);
+
+    // Flat scattered field sized to the camera's actual frustum at the
+    // field's depth, so nodes spread edge-to-edge across the hero banner
+    // (not a fixed box that happens to read as a rounded cluster once it
+    // rotates) -- x/y cover the full visible width/height, z stays shallow
+    // for subtle parallax only.
+    var fieldDepthCenter = -8;
+    var fieldDist = camera.position.z - fieldDepthCenter;
+    var vFOV = camera.fov * Math.PI / 180;
+    var fieldHeight = 2 * Math.tan(vFOV / 2) * fieldDist;
+    var fieldWidth = fieldHeight * camera.aspect;
+
+    var NODE_COUNT = 140;
+    var positions = new Float32Array(NODE_COUNT * 3);
+    var nodePositions = [];
+    for (var i = 0; i < NODE_COUNT; i++) {
+      var x = (Math.random() - 0.5) * fieldWidth * 1.1;
+      var y = (Math.random() - 0.5) * fieldHeight * 1.1;
+      var z = fieldDepthCenter + (Math.random() - 0.5) * 16;
+      positions[i*3] = x; positions[i*3+1] = y; positions[i*3+2] = z;
+      nodePositions.push(new THREE.Vector3(x, y, z));
+    }
+    var cloudGeo = new THREE.BufferGeometry();
+    cloudGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    var dotTexture = makeRadialDotTexture(64);
+    var cloudMat = new THREE.PointsMaterial({
+      color: CYAN, size: 2.2, map: dotTexture, transparent: true, opacity: 0.75,
+      sizeAttenuation: true, depthWrite: false, blending: THREE.AdditiveBlending
+    });
+    var cloud = new THREE.Points(cloudGeo, cloudMat);
+    scene.add(cloud);
+
+    // faint connective lines between some nearby nodes
+    var lineVerts = [];
+    for (var a = 0; a < NODE_COUNT; a += 3) {
+      var pa = nodePositions[a];
+      var nearest = null, nd = Infinity;
+      for (var b = 0; b < NODE_COUNT; b++) {
+        if (a === b) continue;
+        var d = pa.distanceToSquared(nodePositions[b]);
+        if (d < nd) { nd = d; nearest = nodePositions[b]; }
+      }
+      if (nearest && nd < 100) {
+        lineVerts.push(pa.x, pa.y, pa.z, nearest.x, nearest.y, nearest.z);
+      }
+    }
+    var lineGeo = new THREE.BufferGeometry();
+    lineGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(lineVerts), 3));
+    var lineMat = new THREE.LineBasicMaterial({ color: BORDER, transparent: true, opacity: 0.4 });
+    scene.add(new THREE.LineSegments(lineGeo, lineMat));
+
+    // the attack chain: pick 7 nodes forming a rough path
+    var chainIdx = [];
+    var used = new Set();
+    var startI = Math.floor(Math.random() * NODE_COUNT);
+    chainIdx.push(startI); used.add(startI);
+    for (var c = 1; c < 7; c++) {
+      var prevP = nodePositions[chainIdx[c-1]];
+      var best = -1, bestD = Infinity;
+      for (var k = 0; k < NODE_COUNT; k++) {
+        if (used.has(k)) continue;
+        var dd = prevP.distanceToSquared(nodePositions[k]);
+        if (dd < bestD) { bestD = dd; best = k; }
+      }
+      if (best === -1) break;
+      chainIdx.push(best); used.add(best);
+    }
+    var chainPts = chainIdx.map(function(i){ return nodePositions[i]; });
+
+    var chainLineGeo = new THREE.BufferGeometry().setFromPoints(chainPts);
+    var chainLineMat = new THREE.LineBasicMaterial({ color: AMBER, transparent: true, opacity: 0.9 });
+    var chainLine = new THREE.Line(chainLineGeo, chainLineMat);
+    scene.add(chainLine);
+
+    var chainNodesGeo = new THREE.BufferGeometry().setFromPoints(chainPts);
+    var chainNodesMat = new THREE.PointsMaterial({
+      color: AMBER, size: 3.6, map: dotTexture, transparent: true, opacity: 1,
+      sizeAttenuation: true, depthWrite: false, blending: THREE.AdditiveBlending
+    });
+    var chainNodes = new THREE.Points(chainNodesGeo, chainNodesMat);
+    scene.add(chainNodes);
+
+    function resize(){
+      var w = heroEl.clientWidth, h = heroEl.clientHeight;
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
+    }
+    window.addEventListener('resize', resize);
+
+    var clock = new THREE.Clock();
+    var cycle = 3.2; // seconds per pulse cycle (baseline -> amber -> red -> reset)
+
+    function animate(){
+      requestAnimationFrame(animate);
+      var t = clock.getElapsedTime();
+
+      if (!reduceMotion) {
+        cloud.rotation.y = t * 0.02;
+        chainLine.rotation.y = t * 0.02;
+        chainNodes.rotation.y = t * 0.02;
+      }
+
+      var phase = (t % cycle) / cycle; // 0..1
+      var col;
+      if (phase < 0.55) {
+        col = new THREE.Color(AMBER);
+      } else {
+        col = new THREE.Color(AMBER).lerp(new THREE.Color(CRITICAL), (phase - 0.55) / 0.45);
+      }
+      chainLineMat.color.copy(col);
+      chainNodesMat.color.copy(col);
+      var pulse = 3.6 + Math.sin(t * 4) * 1.1;
+      chainNodesMat.size = reduceMotion ? 3.6 : pulse;
+
+      renderer.render(scene, camera);
+    }
+    animate();
+  })();
+
+  /* ---------------------------------------------------------------
+     GLOBE SCENE: rotating globe with flagged cities + attack arcs.
+     Colors here are pulled 1:1 from dashboard/palette.py's
+     ANOMALY_TYPE_COLORS and RISK_SEQUENTIAL_RAMP -- the same mapping
+     the live dashboard's Attack Map (go.Scattergeo, orthographic
+     projection) uses -- so this view reads as the same product, not
+     a reskinned three.js demo.
+  --------------------------------------------------------------- */
+  (function globeScene(){
+    var wrap = document.getElementById('globe-wrap');
+    var canvas = document.getElementById('globe-canvas');
+    if (!wrap || !canvas) return;
+
+    // dashboard/palette.py::ANOMALY_TYPE_COLORS, verbatim
+    var ANOMALY_COLORS = {
+      brute_force:         0x2a78d6,
+      impossible_travel:   0xeb6834,
+      lateral_movement:    0x1baf7a,
+      credential_misuse:   0xeda100,
+      device_spoofing:     0xe87ba4,
+      credential_stuffing: 0x008300
+    };
+    var ANOMALY_LABELS = {
+      brute_force: 'brute_force', impossible_travel: 'impossible_travel',
+      lateral_movement: 'lateral_movement', credential_misuse: 'credential_misuse',
+      device_spoofing: 'device_spoofing', credential_stuffing: 'credential_stuffing'
+    };
+    // dashboard/palette.py::RISK_SEQUENTIAL_RAMP, verbatim (step 300 -> 700)
+    var RISK_RAMP = [0x6da7ec, 0x5598e7, 0x3987e5, 0x2a78d6, 0x256abf, 0x1c5cab, 0x184f95, 0x104281, 0x0d366b];
+    var RISK_ACCENT = 0x3987e5; // palette.py RISK_ACCENT -- used for the globe's rim glow
+    var OCEAN = 0x0d1520;       // dark navy-teal base, close to the dashboard's near-black ocean/page plane without going flat black
+
+    function riskRampColor(frac){
+      var idx = Math.round(Math.max(0, Math.min(1, frac)) * (RISK_RAMP.length - 1));
+      return RISK_RAMP[idx];
+    }
+    function hexToCss(h){ return '#' + h.toString(16).padStart(6, '0'); }
+
+    // legend: same swatches, same order, as dashboard/app.py's _color_legend_html / palette.domain_range
+    var legendEl = document.getElementById('globe-legend');
+    if (legendEl) {
+      var rows = Object.keys(ANOMALY_COLORS).map(function(k){
+        return '<div class="row"><span class="sw-dot" style="color:' + hexToCss(ANOMALY_COLORS[k]) + '"></span>' + ANOMALY_LABELS[k] + '</div>';
+      }).join('');
+      legendEl.innerHTML = rows
+        + '<div class="divider"></div>'
+        + '<div class="row"><span class="sw-line"></span>impossible_travel arc (risk_score)</div>';
+    }
+
+    var scene = new THREE.Scene();
+    var camera = new THREE.PerspectiveCamera(50, wrap.clientWidth / wrap.clientHeight, 0.1, 1000);
+    camera.position.set(0, 0, 26);
+
+    var renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setSize(wrap.clientWidth, wrap.clientHeight);
+
+    var globeGroup = new THREE.Group();
+    scene.add(globeGroup);
+
+    var R = 9;
+
+    // inner solid sphere -- ocean-toned base, not pure black
+    var solidGeo = new THREE.SphereGeometry(R * 0.985, 32, 24);
+    var solidMat = new THREE.MeshBasicMaterial({ color: OCEAN });
+    var solidSphere = new THREE.Mesh(solidGeo, solidMat);
+    globeGroup.add(solidSphere);
+
+    // outer wireframe sphere (lat/long grid) -- faint, reads as a globe grid not a wireframe toy
+    var wireGeo = new THREE.SphereGeometry(R, 24, 16);
+    var wireMat = new THREE.MeshBasicMaterial({ color: BORDER, wireframe: true, transparent: true, opacity: 0.18 });
+    var wireSphere = new THREE.Mesh(wireGeo, wireMat);
+    globeGroup.add(wireSphere);
+
+    // fresnel rim-light glow (classic orthographic-globe atmosphere effect):
+    // a slightly larger backside sphere, additive-blended, brightest at the silhouette edge
+    var glowGeo = new THREE.SphereGeometry(R * 1.06, 32, 24);
+    var glowMat = new THREE.ShaderMaterial({
+      uniforms: { glowColor: { value: new THREE.Color(RISK_ACCENT) } },
+      vertexShader: [
+        'varying vec3 vNormal;',
+        'void main() {',
+        '  vNormal = normalize( normalMatrix * normal );',
+        '  gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );',
+        '}'
+      ].join('\n'),
+      fragmentShader: [
+        'uniform vec3 glowColor;',
+        'varying vec3 vNormal;',
+        'void main() {',
+        '  float intensity = pow( 0.75 - dot( vNormal, vec3(0.0, 0.0, 1.0) ), 3.0 );',
+        '  gl_FragColor = vec4( glowColor, 1.0 ) * intensity;',
+        '}'
+      ].join('\n'),
+      side: THREE.BackSide,
+      blending: THREE.AdditiveBlending,
+      transparent: true,
+      depthWrite: false
+    });
+    var glowSphere = new THREE.Mesh(glowGeo, glowMat);
+    globeGroup.add(glowSphere);
+
+    function latLngToVec3(lat, lng, radius){
+      var phi = (90 - lat) * Math.PI / 180;
+      var theta = (lng + 180) * Math.PI / 180;
+      var x = -(radius * Math.sin(phi) * Math.cos(theta));
+      var z = (radius * Math.sin(phi) * Math.sin(theta));
+      var y = (radius * Math.cos(phi));
+      return new THREE.Vector3(x, y, z);
+    }
+
+    // illustrative flagged locations -- each tagged with one of the 6 real
+    // anomaly types so the point colors mean the same thing they do on the
+    // dashboard's Attack Map, not a generic single-color marker set
+    var cities = [
+      { name: 'Bangalore', lat: 12.97, lng: 77.59, type: 'brute_force' },
+      { name: 'Santiago', lat: -33.45, lng: -70.65, type: 'impossible_travel' },
+      { name: 'London', lat: 51.51, lng: -0.13, type: 'lateral_movement' },
+      { name: 'Moscow', lat: 55.76, lng: 37.62, type: 'credential_misuse' },
+      { name: 'Singapore', lat: 1.35, lng: 103.82, type: 'device_spoofing' },
+      { name: 'New York', lat: 40.71, lng: -74.01, type: 'credential_stuffing' },
+      { name: 'Sydney', lat: -33.87, lng: 151.21, type: 'brute_force' },
+      { name: 'Frankfurt', lat: 50.11, lng: 8.68, type: 'impossible_travel' },
+      { name: 'Tokyo', lat: 35.68, lng: 139.69, type: 'lateral_movement' },
+      { name: 'Sao Paulo', lat: -23.55, lng: -46.63, type: 'credential_misuse' },
+      { name: 'Cape Town', lat: -33.92, lng: 18.42, type: 'device_spoofing' },
+      { name: 'Toronto', lat: 43.65, lng: -79.38, type: 'credential_stuffing' }
+    ];
+
+    // shared glow-sprite texture (one canvas, one CanvasTexture, reused by every halo sprite)
+    function makeGlowTexture(){
+      var size = 128;
+      var c = document.createElement('canvas');
+      c.width = c.height = size;
+      var ctx = c.getContext('2d');
+      var grad = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2);
+      grad.addColorStop(0, 'rgba(255,255,255,1)');
+      grad.addColorStop(0.4, 'rgba(255,255,255,0.35)');
+      grad.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, size, size);
+      return new THREE.CanvasTexture(c);
+    }
+    var glowTexture = makeGlowTexture();
+
+    // one shared core geometry + one shared core/sprite material PER anomaly
+    // type (6 of each, total) -- reused across every point of that type
+    // rather than allocated per-point, to keep draw calls/materials capped
+    var pointGeo = new THREE.SphereGeometry(0.15, 8, 8);
+    var coreMatByType = {}, spriteMatByType = {};
+    Object.keys(ANOMALY_COLORS).forEach(function(type){
+      coreMatByType[type] = new THREE.MeshBasicMaterial({ color: ANOMALY_COLORS[type] });
+      spriteMatByType[type] = new THREE.SpriteMaterial({
+        map: glowTexture, color: ANOMALY_COLORS[type],
+        transparent: true, blending: THREE.AdditiveBlending, depthWrite: false
+      });
+    });
+
+    var cityPositions = [];
+    cities.forEach(function(c){
+      var pos = latLngToVec3(c.lat, c.lng, R * 1.01);
+      cityPositions.push({ name: c.name, pos: pos });
+
+      var mesh = new THREE.Mesh(pointGeo, coreMatByType[c.type]);
+      mesh.position.copy(pos);
+      globeGroup.add(mesh);
+
+      // point-light glow halo (billboarded sprite, always faces camera)
+      var halo = new THREE.Sprite(spriteMatByType[c.type]);
+      halo.position.copy(pos);
+      halo.scale.set(1.3, 1.3, 1);
+      globeGroup.add(halo);
+    });
+
+    function findCity(name){
+      for (var i = 0; i < cityPositions.length; i++) if (cityPositions[i].name === name) return cityPositions[i].pos;
+      return null;
+    }
+
+    // impossible_travel arcs -- colored by risk_score along the dashboard's
+    // own sequential ramp (light = lower risk, dark = higher), exactly the
+    // encoding classification's risk_ramp_color() uses, not an invented one
+    var arcPairs = [
+      ['Santiago', 'Bangalore', 0.42],
+      ['London', 'Singapore', 0.81],
+      ['New York', 'Tokyo', 0.63]
+    ];
+
+    var arcData = [];
+    arcPairs.forEach(function(pair){
+      var p1 = findCity(pair[0]), p2 = findCity(pair[1]);
+      if (!p1 || !p2) return;
+      var color = riskRampColor(pair[2]);
+      var mid = p1.clone().add(p2).multiplyScalar(0.5);
+      var midLen = mid.length();
+      mid.normalize().multiplyScalar(midLen + R * 0.55);
+      var curve = new THREE.QuadraticBezierCurve3(p1, mid, p2);
+      var pts = curve.getPoints(64);
+      var geo = new THREE.BufferGeometry().setFromPoints(pts);
+      var mat = new THREE.LineBasicMaterial({ color: color, transparent: true, opacity: 0.85 });
+      var line = new THREE.Line(geo, mat);
+      globeGroup.add(line);
+
+      var dotGeo = new THREE.SphereGeometry(0.2, 8, 8);
+      var dotMat = new THREE.MeshBasicMaterial({ color: color });
+      var dot = new THREE.Mesh(dotGeo, dotMat);
+      globeGroup.add(dot);
+
+      arcData.push({ curve: curve, dot: dot, offset: Math.random() });
+    });
+
+    function resize(){
+      var w = wrap.clientWidth, h = wrap.clientHeight;
+      if (w === 0 || h === 0) return;
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
+    }
+    window.addEventListener('resize', resize);
+    if (window.ResizeObserver) {
+      new ResizeObserver(resize).observe(wrap);
+    }
+
+    // drag-to-rotate
+    var dragging = false, lastX = 0, lastY = 0;
+    var rotVX = 0, rotVY = 0;
+    var idleTimer = 0;
+
+    function onDown(e){
+      dragging = true;
+      wrap.classList.add('grabbing');
+      var p = e.touches ? e.touches[0] : e;
+      lastX = p.clientX; lastY = p.clientY;
+      idleTimer = 0;
+    }
+    function onMove(e){
+      if (!dragging) return;
+      var p = e.touches ? e.touches[0] : e;
+      var dx = p.clientX - lastX, dy = p.clientY - lastY;
+      lastX = p.clientX; lastY = p.clientY;
+      rotVY = dx * 0.005;
+      rotVX = dy * 0.005;
+      globeGroup.rotation.y += rotVY;
+      globeGroup.rotation.x += rotVX;
+      idleTimer = 0;
+    }
+    function onUp(){
+      dragging = false;
+      wrap.classList.remove('grabbing');
+    }
+    wrap.addEventListener('pointerdown', onDown);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    wrap.style.touchAction = 'none';
+
+    var clock = new THREE.Clock();
+    function animate(){
+      requestAnimationFrame(animate);
+      var dt = clock.getDelta();
+      var t = clock.getElapsedTime();
+
+      if (!dragging && !reduceMotion) {
+        idleTimer += dt;
+        globeGroup.rotation.y += 0.0025;
+        // momentum decay
+        rotVX *= 0.94; rotVY *= 0.94;
+      }
+
+      arcData.forEach(function(a){
+        var pos = a.offset + (reduceMotion ? 0 : t * 0.18);
+        pos = pos % 1;
+        var pt = a.curve.getPoint(pos);
+        a.dot.position.copy(pt);
+        var pulse = 1 + Math.sin(t * 5) * 0.15;
+        a.dot.scale.setScalar(reduceMotion ? 1 : pulse);
+      });
+
+      renderer.render(scene, camera);
+    }
+    animate();
+    resize();
+  })();
+})();
+</script>
+
+</body>
+</html>

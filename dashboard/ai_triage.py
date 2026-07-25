@@ -1,5 +1,5 @@
 """
-AI Triage Copilot: a live Gemini call that drafts a SOC-analyst-style
+AI Triage Copilot: a live Groq call that drafts a SOC-analyst-style
 assessment for one selected alert (Alert Queue view only).
 
 Deliberately uncached -- dashboard/data.py's @st.cache_data loaders exist
@@ -11,14 +11,31 @@ a fresh call, so nothing here is wrapped in @st.cache_data.
 import json
 import os
 
-from google import genai
-from google.genai import types
+from dotenv import load_dotenv
+from groq import Groq
 
-# Tried in order for every call: gemini-2.5-flash returns 404 for accounts
-# without legacy access, so gemini-flash-latest (the current default alias)
-# is tried first, falling back to the pinned gemini-2.0-flash if that alias
-# is ever unavailable for a given key/project.
-MODEL_CANDIDATES = ("gemini-flash-latest", "gemini-2.0-flash")
+# Loads GROQ_API_KEY (and anything else) from a local .env file in the
+# project root into os.environ, if one exists -- run at import time, before
+# is_configured()/run_triage() ever read the environment, so a developer
+# doesn't have to `export GROQ_API_KEY=...` every session. A real .env is
+# gitignored; see .env.example for the expected format. No-op (and harmless)
+# if the key is already set some other way, e.g. a real environment variable
+# or a deployment platform's secrets manager.
+load_dotenv()
+
+MODEL_NAME = "llama-3.3-70b-versatile"
+
+# Client is initialized once at import time and reused across calls rather
+# than constructed per-request.
+_client = None
+
+
+def _get_client():
+    global _client
+    if _client is None:
+        _client = Groq(api_key=os.environ["GROQ_API_KEY"])
+    return _client
+
 
 RESPONSE_SCHEMA = {
     "type": "object",
@@ -46,9 +63,9 @@ RESPONSE_SCHEMA = {
 
 
 def is_configured():
-    """Whether GOOGLE_API_KEY is set -- callers use this to show a setup
+    """Whether GROQ_API_KEY is set -- callers use this to show a setup
     message instead of attempting (and crashing on) a keyless API call."""
-    return bool(os.environ.get("GOOGLE_API_KEY"))
+    return bool(os.environ.get("GROQ_API_KEY"))
 
 
 def _build_prompt(alert, recent_events):
@@ -76,34 +93,23 @@ Based on the alert and this entity's recent behavior, provide:
 2. A recommended response action (e.g. "investigate further", "likely false positive - first use of new resource", "escalate immediately - high confidence attack").
 3. Your confidence level (low/medium/high) in this assessment.
 
-Respond with JSON matching the provided schema only."""
+Respond with JSON matching this schema only:
+{json.dumps(RESPONSE_SCHEMA)}"""
 
 
 def run_triage(alert, recent_events):
-    """One live call to Gemini for a single alert. Returns a dict with
+    """One live call to Groq for a single alert. Returns a dict with
     'summary', 'recommended_action', 'confidence', plus '_model_used' (the
-    candidate from MODEL_CANDIDATES that actually answered, for display).
-    Tries each candidate model in order, moving to the next only if the call
-    itself raises (e.g. a 404 for a model unavailable to this key/project);
-    raises the last error if every candidate fails. Callers catch and render
-    an error card rather than this module failing silently."""
-    api_key = os.environ["GOOGLE_API_KEY"]
-    client = genai.Client(api_key=api_key)
-    contents = _build_prompt(alert, recent_events)
-    config = types.GenerateContentConfig(
-        response_mime_type="application/json",
-        response_schema=RESPONSE_SCHEMA,
+    model that answered, for display)."""
+    client = _get_client()
+    prompt = _build_prompt(alert, recent_events)
+
+    response = client.chat.completions.create(
+        model=MODEL_NAME,
+        messages=[{"role": "user", "content": prompt}],
+        response_format={"type": "json_object"},
         temperature=0.2,
     )
-
-    last_error = None
-    for model_name in MODEL_CANDIDATES:
-        try:
-            response = client.models.generate_content(model=model_name, contents=contents, config=config)
-        except Exception as exc:  # noqa: BLE001 -- try the next candidate on any failure
-            last_error = exc
-            continue
-        result = json.loads(response.text)
-        result["_model_used"] = model_name
-        return result
-    raise last_error
+    result = json.loads(response.choices[0].message.content)
+    result["_model_used"] = MODEL_NAME
+    return result

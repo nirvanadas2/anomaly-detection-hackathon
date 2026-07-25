@@ -36,10 +36,30 @@ from classification.geo import CITY_COORDS  # noqa: E402
 
 st.set_page_config(page_title="Anomaly Detection Dashboard", page_icon="🛡️", layout="wide")
 
+# Reciprocal link back to the project landing page (docs/index.html), same
+# constant pattern as docs/index.html's own DASHBOARD_URL. Unlike that
+# localhost default, there's no dev server for a static file to point at
+# locally -- Streamlit only serves its own app, not arbitrary repo paths --
+# so this defaults to the GitHub Pages URL. Replace <your-org>/<your-repo>
+# once Pages is enabled; for local testing, swap in a file:// URL to this
+# repo's docs/index.html on your machine.
+LANDING_PAGE_URL = "https://<your-org>.github.io/<your-repo>/"
+
 # Avg per-event scoring+classification latency measured by demo_streaming.py's
 # live replay (see README's "Key results" -- not computed by this app, since
 # that script writes no output file, only a console summary).
 STREAMING_AVG_LATENCY_MS = 0.565
+
+# Alert Queue incident grouping: consecutive alerts from the same entity_id
+# less than this many minutes apart get merged into one incident. Display-only
+# -- purely a re-grouping of classification/classify.py's existing per-event
+# output, doesn't change how any individual event is scored or classified.
+INCIDENT_GROUPING_WINDOW_MINUTES = 30
+
+# Incident cards are raw HTML <details> elements (a real native expand/collapse,
+# not a virtualized grid like st.dataframe), so rendering hundreds of them
+# unpaginated is genuinely slow to lay out -- cap how many render per page.
+INCIDENT_CARDS_PER_PAGE = 40
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +243,133 @@ def style_risk_score_gradient(styler, series, column="risk_score"):
 # ---------------------------------------------------------------------------
 # View 1: Alert Queue
 # ---------------------------------------------------------------------------
+def group_alerts_into_incidents(alerts_df, window_minutes=INCIDENT_GROUPING_WINDOW_MINUTES):
+    """Group flagged alerts from the same entity_id into incidents: consecutive
+    alerts (sorted by timestamp) less than `window_minutes` apart get merged
+    into one incident -- a session-style gap clustering, not a fixed window
+    from the first event, so a slow-building chain still stays one incident
+    as long as no single gap between consecutive events exceeds the window.
+
+    Purely a display-layer regrouping of classification/classify.py's existing
+    per-event output (`alerts_df` is whatever's already powering the flat
+    Alert Queue table) -- doesn't change how any individual event was scored
+    or classified.
+
+    Within an incident, the "winning" classification is whichever named
+    attack type (i.e. not "unclassified") has the highest average risk_score
+    among that incident's events; an incident with no named type stays
+    "unclassified". Returns one row per incident with the merged summary plus
+    the underlying per-event rows, so the original events are still reachable.
+    """
+    incidents = []
+    for entity_id, entity_alerts in alerts_df.sort_values("timestamp").groupby("entity_id", sort=False):
+        entity_alerts = entity_alerts.reset_index(drop=True)
+        gap = entity_alerts["timestamp"].diff()
+        incident_id = (gap > pd.Timedelta(minutes=window_minutes)).cumsum()
+        for _, rows in entity_alerts.groupby(incident_id):
+            incidents.append(_summarize_incident(entity_id, rows))
+    return pd.DataFrame(incidents)
+
+
+def _summarize_incident(entity_id, rows):
+    rows = rows.sort_values("timestamp")
+    named = rows[rows["anomaly_type"] != "unclassified"]
+    if named.empty:
+        winning_type = "unclassified"
+    else:
+        winning_type = named.groupby("anomaly_type")["risk_score"].mean().idxmax()
+
+    n_events = len(rows)
+    n_absorbed_unclassified = int((rows["anomaly_type"] == "unclassified").sum())
+    note = None
+    if winning_type != "unclassified" and n_absorbed_unclassified > 0:
+        note = (
+            f"{n_absorbed_unclassified} of {n_events} events were individually unclassified -- "
+            f"grouped here based on temporal proximity to a confirmed {winning_type} incident."
+        )
+
+    start_time = rows["timestamp"].min()
+    end_time = rows["timestamp"].max()
+    return {
+        "entity_id": entity_id,
+        "start_time": start_time,
+        "end_time": end_time,
+        "duration_minutes": (end_time - start_time).total_seconds() / 60.0,
+        "n_events": n_events,
+        "anomaly_type": winning_type,
+        "risk_score": float(rows["risk_score"].max()),
+        "n_differently_classified": int((rows["anomaly_type"] != winning_type).sum()),
+        "note": note,
+        "events": rows[["event_id", "timestamp", "resource_accessed", "anomaly_type", "risk_score", "explanation"]].to_dict("records"),
+    }
+
+
+def _incident_card_html(incident):
+    """HTML for one incident as an expandable native <details> card --
+    entity_id, winning-classification badge, time range, event count, and
+    highest risk_score in the summary row; the absorbed individual events
+    (with their own per-event classification, when it differs from the
+    incident's) inside. Returns a string rather than calling st.markdown
+    itself, so a queue of many incidents can be joined into one markdown call
+    -- calling st.markdown once per card is the difference between a
+    near-instant render and a multi-second one once there are hundreds of
+    incidents."""
+    color = palette.FULL_COLOR_MAP.get(incident["anomaly_type"], palette.COLOR_UNCLASSIFIED)
+    entity_id = html.escape(str(incident["entity_id"]))
+    anomaly_type = html.escape(str(incident["anomaly_type"]))
+    start_str = incident["start_time"].strftime("%Y-%m-%d %H:%M:%S")
+    end_str = incident["end_time"].strftime("%H:%M:%S")
+    duration = incident["duration_minutes"]
+    duration_str = f"{duration:.0f} min" if duration >= 1 else f"{duration * 60:.0f} sec"
+    n_events = incident["n_events"]
+    event_word = "event" if n_events == 1 else "events"
+
+    note_html = ""
+    if incident["note"]:
+        note_html = (
+            f'<div style="margin-top:10px; padding:9px 14px; background:{color}14; '
+            f'border-left:3px solid {color}; border-radius:4px; font-size:0.85rem; color: var(--text-primary);">'
+            f'⚠️ {html.escape(incident["note"])}</div>'
+        )
+
+    event_rows_html = ""
+    for ev in incident["events"]:
+        ev_type = str(ev["anomaly_type"])
+        ev_color = palette.FULL_COLOR_MAP.get(ev_type, palette.COLOR_UNCLASSIFIED)
+        differs_html = (
+            f'<span style="color:{ev_color}; font-size:0.72rem; margin-left:8px;">(individually: {html.escape(ev_type)})</span>'
+            if ev_type != incident["anomaly_type"] else ""
+        )
+        event_rows_html += (
+            '<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; '
+            'padding:8px 12px; border-bottom:1px solid var(--border); font-size:0.85rem;">'
+            f'<span style="color:var(--text-muted); font-family:monospace; white-space:nowrap;">{ev["timestamp"].strftime("%Y-%m-%d %H:%M:%S")}</span>'
+            f'<span style="color:var(--text-primary); font-weight:600;">{html.escape(str(ev["resource_accessed"]))}</span>'
+            f'<span style="color:var(--text-muted); font-family:monospace; font-size:0.8rem;">{html.escape(str(ev["event_id"]))}{differs_html}</span>'
+            '</div>'
+        )
+
+    return f"""
+        <details style="background: var(--surface-1); border: 1px solid var(--border);
+                    border-left: 4px solid {color}; border-radius: 10px;
+                    padding: 14px 20px; margin-bottom: 10px;">
+          <summary style="cursor:pointer;">
+            <span style="display:inline-flex; align-items:center; gap:12px; flex-wrap:wrap;">
+              <span style="font-weight:700; color:var(--text-primary); font-family:monospace;">{entity_id}</span>
+              <span style="background:{color}26; color:{color}; border:1px solid {color}66; border-radius:4px; padding:2px 10px; font-size:0.78rem; font-weight:600;">{anomaly_type}</span>
+              <span style="color:var(--text-muted); font-size:0.85rem;">{start_str} &rarr; {end_str}</span>
+              <span style="color:var(--text-secondary); font-size:0.85rem;">{n_events} {event_word} over {duration_str}</span>
+              <span style="color:var(--text-primary); font-weight:700;">risk={incident['risk_score']:.4f}</span>
+            </span>
+          </summary>
+          {note_html}
+          <div style="margin-top:12px;">
+            {event_rows_html}
+          </div>
+        </details>
+        """
+
+
 # Confidence -> color for the AI Triage Copilot card. Not part of palette.py's
 # validated categorical/sequential sets (those encode anomaly_type and
 # risk_score respectively) -- this is a separate status axis, so it borrows
@@ -236,7 +383,7 @@ TRIAGE_CONFIDENCE_COLORS = {
 
 
 def _render_triage_card(result):
-    """Styled card for one Gemini triage result. Model output is untrusted
+    """Styled card for one Groq triage result. Model output is untrusted
     text, so every field is html.escape()'d before going into unsafe_allow_html
     markdown."""
     confidence = str(result.get("confidence", "")).strip().lower()
@@ -244,7 +391,7 @@ def _render_triage_card(result):
     summary = html.escape(str(result.get("summary", "")))
     action = html.escape(str(result.get("recommended_action", "")))
     confidence_label = html.escape(confidence or "unknown")
-    model_used = html.escape(str(result.get("_model_used", "gemini")))
+    model_used = html.escape(str(result.get("_model_used", "groq")))
 
     st.markdown(
         f"""
@@ -278,6 +425,15 @@ def render_alert_queue():
 
     st.markdown(_color_legend_html(df["anomaly_type"].unique()), unsafe_allow_html=True)
 
+    show_ungrouped = st.checkbox(
+        "Show ungrouped events",
+        value=False,
+        help=(
+            f"By default, alerts from the same entity_id within {INCIDENT_GROUPING_WINDOW_MINUTES} min of each "
+            "other are grouped into a single incident. Check this to see the original flat, one-row-per-event list instead."
+        ),
+    )
+
     col1, col2 = st.columns([2, 3])
     with col1:
         types = sorted(df["anomaly_type"].unique())
@@ -293,26 +449,56 @@ def render_alert_queue():
     filtered = df[df["anomaly_type"].isin(selected_types) & df["risk_score"].between(*score_range)]
     filtered = filtered.sort_values("risk_score", ascending=False)
 
-    st.caption(f"Showing {len(filtered):,} of {len(df):,} alerts")
-    display_cols = ["entity_id", "timestamp", "anomaly_type", "risk_score", "explanation"]
-    styled = style_risk_score_gradient(
-        style_anomaly_type_column(filtered[display_cols]), filtered["risk_score"],
-    )
-    st.dataframe(
-        styled,
-        width="stretch",
-        hide_index=True,
-        height=560,
-        column_config={
-            "risk_score": st.column_config.NumberColumn(format="%.4f"),
-            "timestamp": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm:ss"),
-            "explanation": st.column_config.TextColumn(width="large"),
-        },
-    )
+    if show_ungrouped:
+        st.caption(f"Showing {len(filtered):,} of {len(df):,} alerts")
+        display_cols = ["entity_id", "timestamp", "anomaly_type", "risk_score", "explanation"]
+        styled = style_risk_score_gradient(
+            style_anomaly_type_column(filtered[display_cols]), filtered["risk_score"],
+        )
+        st.dataframe(
+            styled,
+            width="stretch",
+            hide_index=True,
+            height=560,
+            column_config={
+                "risk_score": st.column_config.NumberColumn(format="%.4f"),
+                "timestamp": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm:ss"),
+                "explanation": st.column_config.TextColumn(width="large"),
+            },
+        )
+    else:
+        incidents = group_alerts_into_incidents(filtered).sort_values("risk_score", ascending=False).reset_index(drop=True)
+        st.caption(
+            f"Showing {len(incidents):,} incidents grouped from {len(filtered):,} flagged events "
+            f"(consecutive alerts from the same entity_id within {INCIDENT_GROUPING_WINDOW_MINUTES} min of "
+            "each other are merged)."
+        )
+        if incidents.empty:
+            st.caption("No alerts match the current filters.")
+        else:
+            # Each card is raw HTML (a native <details> element, for a real
+            # expand/collapse with no JS) rather than a virtualized grid like
+            # st.dataframe -- rendering hundreds of these as DOM at once is
+            # what actually gets slow, not the grouping computation itself,
+            # so page rather than dump the full list every run.
+            n_pages = math.ceil(len(incidents) / INCIDENT_CARDS_PER_PAGE)
+            if n_pages > 1:
+                page_num = st.number_input(
+                    "Page", min_value=1, max_value=n_pages, value=1, step=1,
+                    help=f"{INCIDENT_CARDS_PER_PAGE} incidents per page, {len(incidents):,} incidents total.",
+                )
+            else:
+                page_num = 1
+            start = (page_num - 1) * INCIDENT_CARDS_PER_PAGE
+            page_slice = incidents.iloc[start:start + INCIDENT_CARDS_PER_PAGE]
+            cards_html = "".join(_incident_card_html(incident) for _, incident in page_slice.iterrows())
+            st.markdown(cards_html, unsafe_allow_html=True)
+            if n_pages > 1:
+                st.caption(f"Page {page_num} of {n_pages} ({start + 1}-{min(start + INCIDENT_CARDS_PER_PAGE, len(incidents))} of {len(incidents):,} incidents)")
 
     st.subheader("AI Triage Copilot")
     st.caption(
-        "Pick an alert below to get a live Gemini-drafted incident summary, recommended "
+        "Pick an alert below to get a live Groq-drafted incident summary, recommended "
         "response action, and confidence level -- generated fresh on every selection."
     )
 
@@ -323,10 +509,10 @@ def render_alert_queue():
         alert_row = filtered.loc[filtered["event_id"] == selected_event_id].iloc[0]
 
         if not ai_triage.is_configured():
-            st.info("Set GOOGLE_API_KEY environment variable to enable AI Triage Copilot")
+            st.info("Set GROQ_API_KEY environment variable to enable AI Triage Copilot")
         else:
             recent_events = data.entity_recent_events(alert_row["entity_id"]).to_dict("records")
-            with st.spinner("Consulting Gemini..."):
+            with st.spinner("Consulting Groq..."):
                 try:
                     result = ai_triage.run_triage(alert_row.to_dict(), recent_events)
                 except Exception as exc:
@@ -562,13 +748,21 @@ def render_metrics_summary():
     correctly_typed = int(metrics_df["true_positives"].sum())
     detection_rate = detected_any_type / total_true_anomalies if total_true_anomalies else float("nan")
     budget_ceiling = min(n_alerts, total_true_anomalies) / total_true_anomalies if total_true_anomalies else float("nan")
+    n_incidents = len(group_alerts_into_incidents(data.load_alerts_with_context()))
 
-    k1, k2, k3, k4 = st.columns(4)
+    k1, k2, k3, k4, k5 = st.columns(5)
     k1.metric("Total alerts", f"{n_alerts:,}")
     k2.metric("Detection rate", f"{detection_rate:.1%}")
     k3.metric("Avg event latency", f"{STREAMING_AVG_LATENCY_MS:.3f} ms",
               help="Measured by demo_streaming.py's live event-by-event replay -- see README.")
     k4.metric("ROC-AUC", f"{auc:.4f}")
+    k5.metric("Flagged events → incidents", f"{n_alerts:,} → {n_incidents:,}",
+              f"-{n_alerts - n_incidents:,} to review", delta_color="inverse",
+              help=(
+                  "Alert Queue's incident grouping (Alert Queue tab): consecutive alerts from the same "
+                  f"entity_id within {INCIDENT_GROUPING_WINDOW_MINUTES} min of each other are merged into "
+                  "one incident, so this is how much less an analyst actually has to review, not just a UI convenience."
+              ))
 
     st.caption(f"{total_true_anomalies:,} true anomalies out of {total_events:,} total events "
                f"({total_true_anomalies / total_events:.2%} of traffic) — a heavily imbalanced label set.")
@@ -745,14 +939,16 @@ PAGES = {
 
 
 def main():
-    st.write("DEBUG data module path:", data.__file__)
-    st.write("DEBUG has load_alerts_with_geo:", hasattr(data, "load_alerts_with_geo"))
-
     _inject_theme_css()
     _render_hero()
 
     st.sidebar.title("🛡️ Anomaly Detection")
     st.sidebar.caption("Synthetic access-log anomaly detection: data_gen -> models -> classification")
+    st.sidebar.markdown(
+        f'<a href="{LANDING_PAGE_URL}" target="_blank" rel="noopener" '
+        f'style="font-size:0.85rem;">← Project overview</a>',
+        unsafe_allow_html=True,
+    )
     page = st.sidebar.radio("View", list(PAGES.keys()), label_visibility="collapsed")
     st.sidebar.divider()
     st.sidebar.caption(
