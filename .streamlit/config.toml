@@ -1,0 +1,12 @@
+# Native Streamlit theme, kept in lockstep with dashboard/palette.py's dark
+# chrome tokens. This exists alongside app.py's injected CSS because a few
+# widgets -- most importantly st.dataframe's canvas-rendered grid -- read their
+# colors from this theme, not from page CSS, so CSS injection alone can't turn
+# them dark.
+[theme]
+base = "dark"
+primaryColor = "#3987e5"
+backgroundColor = "#0d0d0d"
+secondaryBackgroundColor = "#1a1a19"
+textColor = "#ffffff"
+font = "sans serif"

@@ -41,6 +41,40 @@ COLOR_CRITICAL = "#d03b3b"      # status: critical -- non-categorical accent (e.
 
 ANOMALY_TYPES = list(ANOMALY_TYPE_COLORS.keys())
 
+# --- dark chrome tokens ------------------------------------------------------
+# App-wide dark theme: page/surface/ink/gridline values are the dataviz skill's
+# validated dark-mode chart chrome (references/palette.md), reused as-is rather
+# than invented, so the CSS theme injected in app.py and every Altair chart's
+# background/gridlines are pulled from this one place and can never drift apart.
+DARK_PAGE_PLANE = "#0d0d0d"
+DARK_SURFACE = "#1a1a19"
+DARK_TEXT_PRIMARY = "#ffffff"
+DARK_TEXT_SECONDARY = "#c3c2b7"
+DARK_TEXT_MUTED = "#898781"
+DARK_GRIDLINE = "#2c2c2a"
+DARK_BASELINE = "#383835"
+DARK_BORDER = "rgba(255,255,255,0.10)"
+
+# Sequential single-hue ramp (blue), dark-surface-appropriate steps only (300->700
+# per references/palette.md's ordinal-ramp guidance: no lighter than step 250 on
+# light, no darker than step 600 on dark -- 700 is included here since this ramp
+# tints a discrete data cell, not a large scale surface). Used for risk_score's
+# magnitude gradient: light = lower risk -> dark = higher risk. This is a
+# *sequential* (magnitude) encoding, deliberately distinct from the categorical
+# ANOMALY_TYPE_COLORS above -- it never doubles as an identity color.
+RISK_SEQUENTIAL_RAMP = [
+    "#6da7ec",  # step 300
+    "#5598e7",  # step 350
+    "#3987e5",  # step 400
+    "#2a78d6",  # step 450
+    "#256abf",  # step 500
+    "#1c5cab",  # step 550
+    "#184f95",  # step 600
+    "#104281",  # step 650
+    "#0d366b",  # step 700
+]
+RISK_ACCENT = "#3987e5"  # step 400 -- the single accent used for risk_score-related UI (KPI top-border, hero rule)
+
 # Every status/anomaly_type value that appears anywhere in the app, in a
 # fixed display order: baseline first, the 6 attack types in palette order,
 # catch-all last.

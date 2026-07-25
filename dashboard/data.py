@@ -16,10 +16,13 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
+from sklearn.metrics import roc_auc_score  # noqa: E402
+
 from classification import config as clf_cfg  # noqa: E402
 from classification.evaluate import (  # noqa: E402
     budget_false_positive_rates, load_alerts_with_truth, per_type_metrics,
 )
+from models.evaluate import load_scored_with_labels  # noqa: E402
 
 ACCESS_LOGS_PATH = clf_cfg.ACCESS_LOGS_PATH
 ALERTS_PATH = clf_cfg.CLASSIFIED_ALERTS_PATH
@@ -59,6 +62,14 @@ def compute_metrics():
     metrics_df = per_type_metrics(merged, truth_label_counts)
     fpr = budget_false_positive_rates(merged, truth_label_counts)
     return metrics_df, fpr, merged, truth_label_counts
+
+
+@st.cache_data
+def compute_roc_auc():
+    """Thin cached wrapper around models/evaluate.py's own scored-vs-ground-truth
+    join -- the same ROC-AUC number `python -m models.evaluate` reports."""
+    df = load_scored_with_labels()
+    return float(roc_auc_score(df["is_anomaly"], df["risk_score"]))
 
 
 def typical_resource_set(resource_series, mass=clf_cfg.TOP_RESOURCE_MASS):
