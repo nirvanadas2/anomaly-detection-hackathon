@@ -841,6 +841,29 @@ const DASHBOARD_URL = "https://anomaly-detection-hackathon.streamlit.app";
     });
   })();
 
+  /* ---------------------------------------------------------------
+     In-page #section links: scroll manually with an explicit offset
+     for the sticky nav, rather than relying on native hash-navigation
+     + scroll-padding-top -- that combination doesn't reliably respect
+     the offset when this page is embedded in an iframe (e.g. the
+     Streamlit landing_app.py wrapper), even though scroll-padding-top
+     alone works fine when the page is opened directly.
+  --------------------------------------------------------------- */
+  (function wireInPageAnchors(){
+    var NAV_OFFSET = 65;
+    document.querySelectorAll('a[href^="#"]').forEach(function(link){
+      var id = link.getAttribute('href').slice(1);
+      if (!id) return;
+      link.addEventListener('click', function(e){
+        var target = document.getElementById(id);
+        if (!target) return;
+        e.preventDefault();
+        var top = target.getBoundingClientRect().top + window.pageYOffset - NAV_OFFSET;
+        window.scrollTo({top: top, behavior: reduceMotion ? 'auto' : 'smooth'});
+      });
+    });
+  })();
+
   if (typeof THREE === 'undefined') return;
 
   var CYAN = 0x4fd1c5, AMBER = 0xe8a33d, CRITICAL = 0xe5484d, BORDER = 0x232838, ELEV = 0x12161f;
