@@ -36,9 +36,13 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# height="content" (the default) auto-measures content height, but that
-# measurement collapses to near-zero for this page in practice (fixed-position
-# background/overlay layers likely confuse the scrollHeight-based detection)
-# -- an explicit generous fixed height sidesteps that; the iframe scrolls
-# internally by default if the real page is taller than this.
-st.iframe(INDEX_HTML_PATH, width="stretch", height=6500)
+# The page's CSS uses vh units (#hero{min-height:92vh}, body{min-height:100vh}),
+# which resolve against the iframe's OWN layout height, not the real browser
+# window -- an oversized iframe height stretches those sections to match,
+# pushing their centered content down into a sea of empty space and blowing up
+# the three.js hero particle scene's scale. A realistic viewport-sized height
+# makes vh resolve the way it does in a normal browser tab; the iframe scrolls
+# internally for the rest of the page, same as scrolling a real page would.
+# (height="content", the default, auto-measures instead, but that measurement
+# collapses to near-zero for this page in practice.)
+st.iframe(INDEX_HTML_PATH, width="stretch", height=1000)
