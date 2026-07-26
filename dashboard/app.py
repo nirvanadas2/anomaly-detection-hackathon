@@ -37,12 +37,8 @@ from classification.geo import CITY_COORDS  # noqa: E402
 st.set_page_config(page_title="Anomaly Detection Dashboard", page_icon="🛡️", layout="wide")
 
 # Reciprocal link back to the project landing page (docs/index.html), same
-# constant pattern as docs/index.html's own DASHBOARD_URL. GitHub Pages isn't
-# enabled for this repo yet, so this points at the local docs/index.html via
-# a file:// URL instead of a github.io URL that would 404. Once Pages is
-# enabled (repo Settings -> Pages -> source: docs/ on master), swap this for
-# https://nirvanadas2.github.io/anomaly-detection-hackathon/.
-LANDING_PAGE_URL = "file:///C:/Users/Nirvana%20Das/anomaly-detection-hackathon/docs/index.html"
+# constant pattern as docs/index.html's own DASHBOARD_URL.
+LANDING_PAGE_URL = "https://nirvanadas2.github.io/anomaly-detection-hackathon/"
 
 # Avg per-event scoring+classification latency measured by demo_streaming.py's
 # live replay (see README's "Key results" -- not computed by this app, since
