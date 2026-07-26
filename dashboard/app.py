@@ -36,10 +36,6 @@ from classification.geo import CITY_COORDS  # noqa: E402
 
 st.set_page_config(page_title="Anomaly Detection Dashboard", page_icon="🛡️", layout="wide")
 
-# Reciprocal link back to the project landing page (docs/index.html), same
-# constant pattern as docs/index.html's own DASHBOARD_URL.
-LANDING_PAGE_URL = "https://nirvanadas2.github.io/anomaly-detection-hackathon/"
-
 # Avg per-event scoring+classification latency measured by demo_streaming.py's
 # live replay (see README's "Key results" -- not computed by this app, since
 # that script writes no output file, only a console summary).
@@ -410,6 +406,103 @@ def _render_triage_card(result):
         """,
         unsafe_allow_html=True,
     )
+
+
+DETECTION_TYPE_COPY = {
+    "brute_force": (
+        "AUTH", "Brute force",
+        "A burst of failed auth attempts from one source_ip against one entity "
+        "within a short window -- worse if that IP has never been seen for this "
+        "entity before.",
+    ),
+    "credential_stuffing": (
+        "AUTH", "Credential stuffing",
+        "The cross-entity signature: many different entities, mostly failing "
+        "auth, hit from a small cluster of related source IPs in the same "
+        "window.",
+    ),
+    "credential_misuse": (
+        "IDENTITY", "Credential misuse",
+        "A login that's novel on every axis at once -- new device, new "
+        "geo_location, and an off-hours timestamp this entity almost never "
+        "uses -- evaluated jointly, not separately.",
+    ),
+    "device_spoofing": (
+        "DEVICE", "Device spoofing",
+        "Access claiming an established identity but arriving from device or "
+        "fingerprint characteristics that don't match this entity's known "
+        "device history.",
+    ),
+    "impossible_travel": (
+        "GEO", "Impossible travel",
+        "Geo-velocity between two consecutive events for the same entity "
+        "exceeds any plausible travel speed -- compounded if the device "
+        "fingerprint changed too.",
+    ),
+    "lateral_movement": (
+        "MOVEMENT", "Lateral movement",
+        "A short-window chain of resources outside the entity's normal set, "
+        "escalating toward progressively rarer, higher-value resources.",
+    ),
+}
+
+
+def render_home():
+    st.markdown(
+        """
+        <p style="font-size:1.05rem; color:var(--text-secondary); max-width:760px;">
+        Redlight Greenlight learns what "normal" looks like for every user, service
+        account, and device in an access-log stream -- then reconstructs anomalies
+        frame by frame, so an analyst can see exactly which events broke the
+        baseline and why, not just a number.
+        </p>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    logs = data.load_access_logs()
+    _, _, _, truth_label_counts = data.compute_metrics()
+    total_events = int(truth_label_counts.sum())
+    normal_events = int(truth_label_counts.get("normal", 0))
+    anomalous_pct = (total_events - normal_events) / total_events
+
+    cols = st.columns(5)
+    cols[0].metric("Anomaly classes", len(palette.ANOMALY_TYPES))
+    cols[1].metric("Entities profiled", f"{logs['entity_id'].nunique():,}")
+    cols[2].metric("Risk score ROC-AUC", f"{data.compute_roc_auc():.4f}")
+    cols[3].metric("Avg scoring latency", f"{STREAMING_AVG_LATENCY_MS:.3f} ms")
+    cols[4].metric("Anomalous of events", f"{anomalous_pct:.2%} of {total_events:,}")
+
+    st.markdown("#### Six classified attack patterns")
+    st.caption(
+        "Each rule looks only at an entity's own history at or before its "
+        "timestamp -- no future knowledge, no peeking across entities except "
+        "where the pattern itself is inherently cross-entity."
+    )
+
+    card_cols = st.columns(3)
+    for i, anomaly_type in enumerate(palette.ANOMALY_TYPES):
+        tag, title, desc = DETECTION_TYPE_COPY[anomaly_type]
+        color = palette.ANOMALY_TYPE_COLORS[anomaly_type]
+        with card_cols[i % 3]:
+            st.markdown(
+                f"""
+                <div style="background:var(--surface-1); border:1px solid var(--border);
+                            border-top:3px solid {color}; border-radius:12px;
+                            padding:16px 18px; margin-bottom:16px; min-height:168px;">
+                  <span style="font-size:0.7rem; font-weight:700; letter-spacing:0.05em;
+                               color:{color};">{tag}</span>
+                  <h5 style="color:var(--text-primary); margin:6px 0 8px 0;">{title}</h5>
+                  <p style="color:var(--text-secondary); font-size:0.85rem; margin:0;">{desc}</p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    st.divider()
+    if st.button("🚀 Launch live dashboard →", type="primary"):
+        st.session_state._pending_nav = "Alert Queue"
+        st.rerun()
 
 
 def render_alert_queue():
@@ -926,6 +1019,7 @@ def render_attack_map():
 # Navigation
 # ---------------------------------------------------------------------------
 PAGES = {
+    "Home": render_home,
     "Alert Queue": render_alert_queue,
     "Entity History": render_entity_history,
     "Metrics Summary": render_metrics_summary,
@@ -937,14 +1031,17 @@ def main():
     _inject_theme_css()
     _render_hero()
 
+    # A widget's session_state key can't be reassigned after that widget has
+    # already been instantiated in the same run (Streamlit raises
+    # StreamlitAPIException) -- so render_home()'s CTA button writes to this
+    # separate _pending_nav key instead of nav_page directly, and it's applied
+    # here, before the radio widget below is created.
+    if "_pending_nav" in st.session_state:
+        st.session_state.nav_page = st.session_state.pop("_pending_nav")
+
     st.sidebar.title("🛡️ Anomaly Detection")
     st.sidebar.caption("Synthetic access-log anomaly detection: data_gen -> models -> classification")
-    st.sidebar.markdown(
-        f'<a href="{LANDING_PAGE_URL}" target="_blank" rel="noopener" '
-        f'style="font-size:0.85rem;">← Project overview</a>',
-        unsafe_allow_html=True,
-    )
-    page = st.sidebar.radio("View", list(PAGES.keys()), label_visibility="collapsed")
+    page = st.sidebar.radio("View", list(PAGES.keys()), key="nav_page", label_visibility="collapsed")
     st.sidebar.divider()
     st.sidebar.caption(
         f"Alert budget: top {clf_cfg.ALERT_BUDGET_FRACTION:.0%} of events by risk_score "
