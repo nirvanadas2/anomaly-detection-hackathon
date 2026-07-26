@@ -36,4 +36,9 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.iframe(INDEX_HTML_PATH, width="stretch")
+# height="content" (the default) auto-measures content height, but that
+# measurement collapses to near-zero for this page in practice (fixed-position
+# background/overlay layers likely confuse the scrollHeight-based detection)
+# -- an explicit generous fixed height sidesteps that; the iframe scrolls
+# internally by default if the real page is taller than this.
+st.iframe(INDEX_HTML_PATH, width="stretch", height=6500)
