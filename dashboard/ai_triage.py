@@ -11,6 +11,7 @@ a fresh call, so nothing here is wrapped in @st.cache_data.
 import json
 import os
 
+import streamlit as st
 from dotenv import load_dotenv
 from groq import Groq
 
@@ -30,10 +31,23 @@ MODEL_NAME = "llama-3.3-70b-versatile"
 _client = None
 
 
+def _get_api_key():
+    """Resolve GROQ_API_KEY from the local environment/.env first (local dev),
+    falling back to Streamlit Cloud's secrets manager (st.secrets) so the same
+    code works when deployed there without a .env file."""
+    key = os.environ.get("GROQ_API_KEY")
+    if key:
+        return key
+    try:
+        return st.secrets.get("GROQ_API_KEY")
+    except Exception:
+        return None
+
+
 def _get_client():
     global _client
     if _client is None:
-        _client = Groq(api_key=os.environ["GROQ_API_KEY"])
+        _client = Groq(api_key=_get_api_key())
     return _client
 
 
@@ -65,7 +79,7 @@ RESPONSE_SCHEMA = {
 def is_configured():
     """Whether GROQ_API_KEY is set -- callers use this to show a setup
     message instead of attempting (and crashing on) a keyless API call."""
-    return bool(os.environ.get("GROQ_API_KEY"))
+    return bool(_get_api_key())
 
 
 def _build_prompt(alert, recent_events):
