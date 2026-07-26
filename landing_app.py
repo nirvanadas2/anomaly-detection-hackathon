@@ -25,12 +25,16 @@ st.set_page_config(
 
 # Streamlit's own chrome (header, padding) would otherwise frame the page and
 # clash with its full-bleed dark design -- collapse that padding so the
-# iframe reads as the whole page, not content inside another app.
+# iframe reads as the whole page, not content inside another app. Making the
+# header merely transparent (background: transparent) left it visually
+# invisible but still present and still capturing clicks, silently blocking
+# clicks on the embedded page's own sticky nav bar (which sits right under
+# it) -- display:none removes it from the layout entirely instead.
 st.markdown(
     """
     <style>
     .block-container { padding: 0 !important; max-width: 100% !important; }
-    header[data-testid="stHeader"] { background: transparent; }
+    header[data-testid="stHeader"] { display: none; }
     </style>
     """,
     unsafe_allow_html=True,
