@@ -324,7 +324,7 @@ def _incident_card_html(incident):
     event_word = "event" if n_events == 1 else "events"
 
     note_html = ""
-    if incident["note"]:
+    if isinstance(incident["note"], str) and incident["note"]:
         note_html = (
             f'<div style="margin-top:10px; padding:9px 14px; background:{color}14; '
             f'border-left:3px solid {color}; border-radius:4px; font-size:0.85rem; color: var(--text-primary);">'
